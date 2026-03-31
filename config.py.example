@@ -1,0 +1,9 @@
+# Copia este archivo como config.py y rellena tus datos
+
+clientes = [
+    {"name": "CLIENTE_EJEMPLO", "host": "ejemplo.splunkcloud.com", "username": "admin", "password": "tu_password"},
+]
+
+clientes_token = [
+    {"name": "CLIENTE_TOKEN_EJEMPLO", "host": "ejemplo.splunkcloud.com", "splunkToken": "tu_token_aqui"},
+]

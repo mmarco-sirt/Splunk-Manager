@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestión de Alertas Splunk</title>
+    <link rel="stylesheet" href="web/style.css">
+</head>
+<body>
+    <h1>Gestión de Alertas Splunk</h1>
+    
+    <label for="clientSelect">Selecciona un cliente:</label>
+    <select id="clientSelect"></select>
+    <button onclick="connectToSplunk()">Conectar</button>
+    
+    <div id="actions" style="display:none;">
+        <h2>Opciones</h2>
+        <button onclick="backupAlerts()">Backup General</button>
+        <button onclick="showSpecificBackup()">Backup Específico</button>
+        <button onclick="restoreAlerts()">Restaurar Alertas</button>
+        <button onclick="backupMacros()">Backup Macros</button>
+        <button onclick="restoreMacros()">Restaurar Macros</button>
+        <button onclick="listAlerts()">Listar Alertas</button>
+    </div>
+    
+    <div id="specificBackup" style="display:none;">
+        <label for="techSelect">Selecciona Tecnología:</label>
+        <select id="techSelect">
+            <option value="AD">AD</option>
+            <option value="FW">FW</option>
+            <option value="AV">AV</option>
+            <option value="PX">PX</option>
+            <option value="MAIL">MAIL</option>
+            <option value="O365">O365</option>
+            <option value="Monitoring">Monitoring</option>
+        </select>
+        <button onclick="backupSpecificAlerts()">Backup Específico</button>
+    </div>
+
+    <!--<div id="status"></div>-->
+    
+    <script src="web/script.js"></script>
+</body>
+</html>
