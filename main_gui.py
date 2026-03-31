@@ -25,6 +25,7 @@ from options.reports.backup_reports import backup_reports
 from options.roles.backup_roles import backup_roles
 from options.roles.restore_roles import restore_roles
 from batch_mode import batch_backup_alerts, batch_restore_alerts
+from options.clientes.manage_clients import get_clients_from_config, save_clients_to_config
 
 TECNOLOGIAS = ["AD", "FW", "AV", "PX", "MAIL", "O365", "MI"]
 
@@ -89,8 +90,8 @@ class SplunkApp(tk.Tk):
         self.btn_connect = ttk.Button(header_frame, text="Conectar", command=self.connect_client)
         self.btn_connect.pack(side="left", padx=5)
 
-        self.btn_creds = ttk.Button(header_frame, text="Editar Credenciales", command=self.edit_credentials)
-        self.btn_creds.pack(side="left", padx=5)
+        btn_manage_clients = ttk.Button(header_frame, text="Gestionar Clientes", command=self.manage_clients_gui)
+        btn_manage_clients.pack(side="left", padx=5)
 
         # PanedWindow para redimensionar dinámicamente
         self.paned_window = ttk.PanedWindow(self, orient=tk.VERTICAL)
@@ -350,61 +351,138 @@ class SplunkApp(tk.Tk):
 
     # --- MÉTODOS DE BATCH Y CREDENCIALES ---
 
-    def edit_credentials(self):
+    def refresh_client_list(self):
+        """Recarga la lista de clientes en el combobox principal y en la variable global."""
+        global clientes
+        
+        reloaded_clients = get_clients_from_config()
+        clientes.clear()
+        clientes.extend(reloaded_clients)
+        
+        self.client_combo['values'] = [c.get("name", "SIN NOMBRE") for c in clientes]
+        if clientes:
+            self.client_combo.current(0)
+        else:
+            self.client_combo.set('')
+        print("ℹ️ Lista de clientes recargada en la GUI.")
+
+    def manage_clients_gui(self):
         win = tk.Toplevel(self)
-        win.title("Editar Credenciales (Sesión Actual)")
-        win.geometry("400x320")
+        win.title("Gestionar Clientes (Permanente)")
+        win.geometry("750x400")
+        win.minsize(600, 350)
         win.grab_set()
 
-        ttk.Label(win, text="Seleccione Cliente:", font=("Arial", 10, "bold")).pack(pady=10)
+        # --- Left Frame (List) ---
+        left_frame = ttk.Frame(win, padding=10)
+        left_frame.pack(side="left", fill="y")
+
+        ttk.Label(left_frame, text="Clientes", font=("Arial", 12, "bold")).pack(pady=5)
+        list_frame = ttk.Frame(left_frame)
+        list_frame.pack(fill="both", expand=True)
         
-        client_combo = ttk.Combobox(win, state="readonly", width=30)
-        client_combo['values'] = [c["name"] for c in clientes]
-        client_combo.pack(pady=5)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
+        listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, width=30, exportselection=False)
+        scrollbar.config(command=listbox.yview)
+        scrollbar.pack(side="right", fill="y")
+        listbox.pack(side="left", fill="both", expand=True)
 
-        frame = ttk.Frame(win, padding=10)
-        frame.pack(fill="both", expand=True)
+        # --- Right Frame (Details) ---
+        right_frame = ttk.LabelFrame(win, text="Detalles del Cliente", padding=15)
+        right_frame.pack(side="right", fill="both", expand=True, padx=10, pady=10)
 
-        ttk.Label(frame, text="Username:").grid(row=0, column=0, sticky="e", pady=5, padx=5)
-        user_entry = ttk.Entry(frame, width=30)
-        user_entry.grid(row=0, column=1, pady=5, padx=5)
+        fields = ["name", "host", "username", "password", "splunkToken"]
+        entries = {}
+        for i, field in enumerate(fields):
+            ttk.Label(right_frame, text=f"{field.capitalize()}:").grid(row=i, column=0, sticky="w", pady=2, padx=5)
+            entry = ttk.Entry(right_frame, width=40)
+            if "password" in field or "token" in field:
+                entry.config(show="*")
+            entry.grid(row=i, column=1, sticky="ew", pady=2, padx=5)
+            entries[field] = entry
+        right_frame.grid_columnconfigure(1, weight=1)
 
-        ttk.Label(frame, text="Password:").grid(row=1, column=0, sticky="e", pady=5, padx=5)
-        pass_entry = ttk.Entry(frame, show="*", width=30)
-        pass_entry.grid(row=1, column=1, pady=5, padx=5)
+        # --- Functions ---
+        def refresh_listbox():
+            listbox.delete(0, tk.END)
+            for c in get_clients_from_config():
+                listbox.insert(tk.END, c['name'])
 
-        ttk.Label(frame, text="Token (Opc.):").grid(row=2, column=0, sticky="e", pady=5, padx=5)
-        token_entry = ttk.Entry(frame, show="*", width=30)
-        token_entry.grid(row=2, column=1, pady=5, padx=5)
+        def on_listbox_select(event):
+            selection_indices = listbox.curselection()
+            if not selection_indices:
+                return
+            
+            selected_name = listbox.get(selection_indices[0])
+            client_data = next((c for c in get_clients_from_config() if c['name'] == selected_name), None)
 
-        def on_client_selected(e=None):
-            sel = client_combo.get()
-            client = next((c for c in clientes if c["name"] == sel), None)
-            if client:
-                user_entry.delete(0, tk.END)
-                user_entry.insert(0, client.get("username", ""))
-                pass_entry.delete(0, tk.END)
-                pass_entry.insert(0, client.get("password", ""))
-                token_entry.delete(0, tk.END)
-                token_entry.insert(0, client.get("splunkToken", ""))
+            if client_data:
+                for field, entry in entries.items():
+                    entry.delete(0, tk.END)
+                    entry.insert(0, client_data.get(field, ""))
 
-        client_combo.bind("<<ComboboxSelected>>", on_client_selected)
-        if clientes:
-            client_combo.current(0)
-            on_client_selected()
+        def add_new():
+            listbox.selection_clear(0, tk.END)
+            for entry in entries.values():
+                entry.delete(0, tk.END)
+            entries["name"].focus()
 
-        def save_creds():
-            sel = client_combo.get()
-            client = next((c for c in clientes if c["name"] == sel), None)
-            if client:
-                client["username"] = user_entry.get()
-                client["password"] = pass_entry.get()
-                client["splunkToken"] = token_entry.get()
-                print(f"🔒 Credenciales de '{sel}' actualizadas temporalmente para esta sesión.")
-                messagebox.showinfo("Guardado", "Credenciales actualizadas correctamente en memoria.")
-                win.destroy()
+        def delete_selected():
+            selection_indices = listbox.curselection()
+            if not selection_indices:
+                messagebox.showwarning("Sin selección", "Seleccione un cliente de la lista para eliminar.")
+                return
 
-        ttk.Button(win, text="Guardar Cambios", command=save_creds).pack(pady=10, ipadx=10, ipady=5)
+            selected_name = listbox.get(selection_indices[0])
+            if not messagebox.askyesno("Confirmar Eliminación", f"¿Está seguro de que desea eliminar a '{selected_name}' de forma permanente?"):
+                return
+
+            current_clients = get_clients_from_config()
+            updated_clients = [c for c in current_clients if c['name'] != selected_name]
+            save_clients_to_config(updated_clients)
+            
+            print(f"🗑️ Cliente '{selected_name}' eliminado permanentemente.")
+            refresh_listbox()
+            self.refresh_client_list()
+            add_new() # Clear fields
+
+        def save_changes():
+            new_data = {field: entry.get() for field, entry in entries.items()}
+            if not new_data.get('name') or not new_data.get('host'):
+                messagebox.showerror("Error", "El nombre y el host son campos obligatorios.")
+                return
+
+            current_clients = get_clients_from_config()
+            selection_indices = listbox.curselection()
+
+            if selection_indices: # Modifying existing
+                selected_name = listbox.get(selection_indices[0])
+                for i, client in enumerate(current_clients):
+                    if client['name'] == selected_name:
+                        current_clients[i] = {k: v for k, v in new_data.items() if v} # Clean empty values
+                        break
+            else: # Adding new
+                if any(c['name'] == new_data['name'] for c in current_clients):
+                    messagebox.showerror("Error", f"Ya existe un cliente con el nombre '{new_data['name']}'.")
+                    return
+                current_clients.append({k: v for k, v in new_data.items() if v})
+
+            save_clients_to_config(current_clients)
+            print("💾 Cambios guardados permanentemente en config.py.")
+            refresh_listbox()
+            self.refresh_client_list()
+
+        # --- Buttons ---
+        btn_frame_left = ttk.Frame(left_frame)
+        btn_frame_left.pack(fill="x", pady=5)
+        ttk.Button(btn_frame_left, text="Añadir Nuevo", command=add_new).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(btn_frame_left, text="Eliminar", command=delete_selected).pack(side="left", expand=True, fill="x", padx=2)
+
+        ttk.Button(right_frame, text="💾 Guardar Cambios", command=save_changes).grid(row=len(fields), column=0, columnspan=2, pady=15, ipady=5)
+
+        # --- Initial Load ---
+        listbox.bind("<<ListboxSelect>>", on_listbox_select)
+        refresh_listbox()
 
     def select_multiple_clients(self, callback):
         win = tk.Toplevel(self)
