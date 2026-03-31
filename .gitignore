@@ -1,0 +1,14 @@
+# Configuración sensible
+config.py
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Archivos temporales de Python
+__pycache__/
+*.py[cod]
+
+# Backups locales (contienen datos del cliente)
+backups/

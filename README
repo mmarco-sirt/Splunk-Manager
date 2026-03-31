@@ -1,0 +1,7 @@
+¿Cómo ejecutar el proyecto?
+
+1. Instalar dependencias
+pip install -r requirements.txt
+
+2. Ejecutar el archivo principal
+python main.py
