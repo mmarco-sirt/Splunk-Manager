@@ -14,6 +14,7 @@ from options.reports.backup_reports import backup_reports
 from options.roles.backup_roles import backup_roles
 from options.roles.restore_roles import restore_roles
 from batch_mode import batch_backup_alerts, batch_restore_alerts, multi_alert_backup_same_client, batch_restore_multiple_alerts_same_client
+from options.clientes.manage_clients import main as manage_clients_main
 
 TECNOLOGIAS = ["AD", "FW", "AV", "PX", "MAIL", "O365", "MI"]
 
@@ -62,6 +63,7 @@ def main():
         print("14) Multi Alert Backup Same Client")
         print("15) Backup Roles")
         print("16) Restore Roles")
+        print("17) Gestionar Clientes (Añadir/Modificar)")
         print("0) Exit")
 
         choice = input("Ingrese una opción: ")
@@ -135,6 +137,10 @@ def main():
             backup_roles(service)
         elif choice == "16":
             restore_roles(service)
+        elif choice == "17":
+            manage_clients_main()
+            print("\nVolviendo al menú principal.")
+            input("NOTA: Si ha realizado cambios, debe reiniciar la aplicación para que se reflejen en la lista de clientes. Presione Enter para continuar...")
 
         elif choice == "0":
             print("Saliendo...")
