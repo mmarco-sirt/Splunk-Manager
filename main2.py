@@ -15,7 +15,7 @@ from options.roles.backup_roles import backup_roles
 from options.roles.restore_roles import restore_roles
 from batch_mode import batch_backup_alerts, batch_restore_alerts, multi_alert_backup_same_client, batch_restore_multiple_alerts_same_client
 
-TECNOLOGIAS = ["AD", "FW", "AV", "PX", "MAIL", "O365", "Monitoring"]
+TECNOLOGIAS = ["AD", "FW", "AV", "PX", "MAIL", "O365", "MI"]
 
 def get_multiple_clients_selection(all_clients):
     """Abstracción para seleccionar uno o varios clientes de la lista."""
