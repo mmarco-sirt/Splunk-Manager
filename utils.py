@@ -17,16 +17,30 @@ def select_client(clients):
             print("Entrada no válida, ingrese un número.")
 
 def connect_to_splunk(client):
-    """Establece la conexión a Splunk solicitando la contraseña de forma segura."""
+    """Establece la conexión a Splunk usando usuario/contraseña o token."""
     try:
-        service = splunklib.client.connect(
-            host=client["host"],
-            username=client["username"],
-            password=client["password"],
-            autologin=True
-        )
-        print(f"Conectado a Splunk como: {client['username']}")
-        return service
+        # Prioritize username/password authentication
+        if client.get("username") and client.get("password"):
+            service = splunklib.client.connect(
+                host=client["host"],
+                username=client["username"],
+                password=client["password"],
+                autologin=True
+            )
+            print(f"Conectado a Splunk como: {client['username']}")
+            return service
+        # Fallback to token authentication
+        elif client.get("splunkToken"):
+            service = splunklib.client.connect(
+                host=client["host"],
+                splunkToken=client["splunkToken"],
+                autologin=True
+            )
+            print(f"Conectado a {client['name']} usando token.")
+            return service
+        else:
+            print("Error: No se proporcionaron credenciales válidas (usuario/contraseña o token).")
+            return None
     except Exception as e:
         print(f"Error al conectar a Splunk: {e}")
         return None
