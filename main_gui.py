@@ -147,8 +147,8 @@ class SplunkApp(tk.Tk):
         self.notebook.add(tab, text="Alerts")
         buttons = [
             ("Backup General Alerts", lambda: self.run_action(backup_alerts)),
-            ("Backup Específico (Tecnología)", self.backup_alerts_specific_prompt),
-            ("Backup Custom Alerts", self.backup_alerts_custom_prompt),
+            ("Backup Específico (Tecnología)", lambda: self.run_action(self.backup_alerts_specific_cli)),
+            ("Backup Custom Alerts", lambda: self.run_action(self.backup_alerts_custom_cli)),
             ("Backup Enterprise Security", lambda: self.run_action(backup_es_use_cases)),
             ("Restore Alerts", self.restore_alerts_gui),
             ("List Active Alerts", lambda: self.run_action(list_active_cases))
@@ -179,7 +179,7 @@ class SplunkApp(tk.Tk):
         tab = ttk.Frame(self.notebook, padding=15)
         self.notebook.add(tab, text="Dashboards & Reports")
         buttons = [
-            ("Backup Dashboard", self.backup_dashboard_prompt),
+            ("Backup Dashboard", lambda: self.run_action(self.backup_dashboard_cli)),
             ("Restore Dashboard", self.restore_dashboard_gui),
             ("Backup Reports", lambda: self.run_action(backup_reports))
         ]
@@ -283,25 +283,30 @@ class SplunkApp(tk.Tk):
                 
         threading.Thread(target=task, daemon=True).start()
 
-    def backup_alerts_specific_prompt(self):
-        win = tk.Toplevel(self)
-        win.title("Seleccionar Tecnología")
-        win.geometry("300x380")
-        
-        ttk.Label(win, text="Seleccione tecnología:", font=("Arial", 12)).pack(pady=10)
-        
-        for tech in TECNOLOGIAS:
-            ttk.Button(win, text=tech, command=lambda t=tech: (self.run_action(backup_alerts_especific, t), win.destroy())).pack(pady=3, fill="x", padx=40)
+    def backup_alerts_specific_cli(self, service):
+        print("\nSeleccione la tecnología:")
+        for i, tech in enumerate(TECNOLOGIAS, 1):
+            print(f"{i}) {tech}")
+        choice = input("Ingrese el número de la opción: ")
+        if choice.isdigit() and 1 <= int(choice) <= len(TECNOLOGIAS):
+            especific = TECNOLOGIAS[int(choice) - 1]
+            backup_alerts_especific(service, especific)
+        else:
+            print("❌ Opción no válida. Operación cancelada.")
 
-    def backup_alerts_custom_prompt(self):
-        name = simpledialog.askstring("Backup Custom Alert", "Nombre de la alerta:")
+    def backup_alerts_custom_cli(self, service):
+        name = input("\nEscriba el nombre de la alerta (Custom): ")
         if name:
-            self.run_action(backup_alerts_custom, name)
+            backup_alerts_custom(service, name)
+        else:
+            print("❌ Nombre vacío. Operación cancelada.")
 
-    def backup_dashboard_prompt(self):
-        dash_name = simpledialog.askstring("Backup Dashboard", "Nombre del Dashboard:")
+    def backup_dashboard_cli(self, service):
+        dash_name = input("\nIngrese el nombre del Dashboard a respaldar: ")
         if dash_name:
-            self.run_action(backup_dashboard, dash_name)
+            backup_dashboard(service, dash_name)
+        else:
+            print("❌ Nombre vacío. Operación cancelada.")
             
     def call_with_file_fallback(self, func, module_name, file_path):
         """Ejecuta una funcion de restauracion. Si la funcion no acepta un parametro de archivo, 
@@ -575,10 +580,11 @@ class SplunkApp(tk.Tk):
             print("⚠️ Sin conexión: Debe conectarse a un cliente primero.")
             return
         
-        alertas_str = simpledialog.askstring("Multi Alert Backup", "Nombres de alertas separados por coma:")
-        if alertas_str:
-            alertas = [a.strip() for a in alertas_str.split(",") if a.strip()]
-            def task():
+        def task():
+            print("\n▶ Iniciando Multi Alert Backup...")
+            alertas_str = input("Ingrese los nombres de las alertas separados por coma:\n> ")
+            if alertas_str:
+                alertas = [a.strip() for a in alertas_str.split(",") if a.strip()]
                 for a in alertas:
                     print(f"\n➡ Backup de {a}...")
                     try:
@@ -586,7 +592,9 @@ class SplunkApp(tk.Tk):
                     except Exception as e:
                         print(f"❌ Error en backup de {a}: {e}")
                 print("✅ Multi Alert Backup completado.")
-            threading.Thread(target=task, daemon=True).start()
+            else:
+                print("❌ Operación cancelada.")
+        threading.Thread(target=task, daemon=True).start()
 
     def multi_alert_restore_gui(self):
         if not self.service:
