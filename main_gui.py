@@ -6,6 +6,7 @@ import inspect
 import importlib
 import sys
 import queue
+import builtins
 
 if getattr(sys, 'frozen', False):
     # Entorno .exe: asegurar que config.py se lea desde la carpeta del ejecutable
@@ -69,6 +70,9 @@ class SplunkApp(tk.Tk):
         self.service = None
         self.current_client = None
 
+        self.input_queue = queue.Queue()
+        self.override_input()
+
         style = ttk.Style(self)
         if "clam" in style.theme_names():
             style.theme_use("clam")
@@ -78,6 +82,17 @@ class SplunkApp(tk.Tk):
         
         print("Bienvenido a Splunk Manager GUI.")
         print("Seleccione un cliente en la parte superior y haga clic en 'Conectar' para empezar.\n")
+
+    def override_input(self):
+        self.original_input = builtins.input
+        def custom_input(prompt=""):
+            if threading.current_thread() is threading.main_thread():
+                res = simpledialog.askstring("Input Requerido", prompt)
+                return res if res is not None else ""
+            else:
+                print(prompt, end="", flush=True)
+                return self.input_queue.get()
+        builtins.input = custom_input
 
     def create_widgets(self):
         # Header Frame
@@ -190,16 +205,34 @@ class SplunkApp(tk.Tk):
         btn_frame.pack(side="top", fill="x")
         ttk.Button(btn_frame, text="🧹 Limpiar Consola", command=self.clear_console).pack(side="right", padx=5, pady=2)
 
-        self.console_text = tk.Text(self.console_frame, height=10, state="disabled", bg="#1e1e1e", fg="#00ff00", font=("Consolas", 10))
-        self.console_scroll = ttk.Scrollbar(self.console_frame, command=self.console_text.yview)
+        text_frame = ttk.Frame(self.console_frame)
+        text_frame.pack(side="top", fill="both", expand=True)
+
+        self.console_text = tk.Text(text_frame, height=10, state="disabled", bg="#1e1e1e", fg="#00ff00", font=("Consolas", 10))
+        self.console_scroll = ttk.Scrollbar(text_frame, command=self.console_text.yview)
         self.console_text.configure(yscrollcommand=self.console_scroll.set)
         
         self.console_scroll.pack(side="right", fill="y")
         self.console_text.pack(side="left", fill="both", expand=True)
 
+        # Input inferior estilo terminal
+        input_frame = ttk.Frame(self.console_frame)
+        input_frame.pack(side="bottom", fill="x", pady=(2, 0))
+        
+        ttk.Label(input_frame, text=">_ ", font=("Consolas", 11, "bold")).pack(side="left", padx=(5, 2))
+        self.cmd_entry = tk.Entry(input_frame, font=("Consolas", 10), bg="#1e1e1e", fg="#00ff00", insertbackground="#00ff00")
+        self.cmd_entry.pack(side="left", fill="x", expand=True)
+        self.cmd_entry.bind("<Return>", self.on_cmd_enter)
+
         # Redirigir stdout y stderr
         sys.stdout = TextRedirector(self.console_text)
         sys.stderr = TextRedirector(self.console_text)
+
+    def on_cmd_enter(self, event):
+        user_text = self.cmd_entry.get()
+        self.cmd_entry.delete(0, tk.END)
+        print(f"{user_text}") # Eco en la consola
+        self.input_queue.put(user_text)
 
     def connect_client(self):
         selection = self.client_combo.get()
