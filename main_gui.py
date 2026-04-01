@@ -7,6 +7,15 @@ import importlib
 import sys
 import queue
 
+if getattr(sys, 'frozen', False):
+    # Entorno .exe: asegurar que config.py se lea desde la carpeta del ejecutable
+    exe_dir = os.path.dirname(sys.executable)
+    sys.path.insert(0, exe_dir)
+    config_file = os.path.join(exe_dir, 'config.py')
+    if not os.path.exists(config_file):
+        with open(config_file, 'w', encoding='utf-8') as f:
+            f.write("clientes = []\n")
+
 from config import clientes
 from utils import connect_to_splunk, ensure_backup_dir
 from options.alerts.backup_alerts import (

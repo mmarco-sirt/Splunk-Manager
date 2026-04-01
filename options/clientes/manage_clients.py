@@ -3,9 +3,14 @@ import sys
 import ast
 import pprint
 
-# Añadir el directorio raíz del proyecto al path para poder encontrar 'config.py'
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, project_root)
+if getattr(sys, 'frozen', False):
+    # Si se ejecuta como .exe, buscar en la carpeta del ejecutable
+    project_root = os.path.dirname(sys.executable)
+else:
+    # Añadir el directorio raíz del proyecto al path para poder encontrar 'config.py'
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sys.path.insert(0, project_root)
+
 CONFIG_PATH = os.path.join(project_root, 'config.py')
 
 def get_clients_from_config():
