@@ -4,7 +4,7 @@ from core.backup_files import choose_backup_file
 
 BACKUP_FOLDER = "users"
 
-def restore_users(service, file_path=None):
+def restore_users(service, file_path=None, initial_password=None):
     """
     Restaura usuarios desde un archivo JSON (si no se indica, se pide por consola).
 
@@ -13,8 +13,8 @@ def restore_users(service, file_path=None):
       - Salida de backup_users: username (o 'name' en backups antiguos), roles, email, realname (sin password)
 
     Los usuarios existentes se actualizan (la contraseña solo si viene en el archivo).
-    Para crear usuarios nuevos sin contraseña en el archivo se pide una contraseña inicial
-    y se fuerza su cambio en el primer login.
+    Para crear usuarios nuevos sin contraseña en el archivo se usa 'initial_password'
+    (si es None se pide por consola; si es vacía no se crean) y se fuerza su cambio en el primer login.
     """
     file_path = file_path or choose_backup_file(BACKUP_FOLDER, "users_", "backup de usuarios")
     if not file_path:
@@ -28,7 +28,6 @@ def restore_users(service, file_path=None):
         return
 
     existing_names = {u.name.lower() for u in service.users}
-    initial_password = None  # Se pide solo una vez, si hace falta
     failed_users = []
 
     for user in users:

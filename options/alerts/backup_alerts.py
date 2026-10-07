@@ -4,6 +4,7 @@ import os
 from core.paths import backup_dir, host_tag
 
 BACKUP_FOLDER = "alertas"
+TECNOLOGIAS = ["AD", "FW", "AV", "PX", "MAIL", "O365", "MI"]
 
 
 def _is_alert(saved_search):
@@ -50,6 +51,24 @@ def backup_alerts_especific(service, especific):
 def backup_alerts_custom(service, custom):
     """Backup de las alertas 'CU-*' cuyo nombre contiene 'custom'."""
     _backup_cu_alerts(service, custom, custom)
+
+
+def backup_alerts_by_name(service, names, file_label="seleccion"):
+    """Backup de las saved searches con esos nombres exactos (las de Enterprise Security incluyen 'app')."""
+    wanted = set(names)
+    entries = []
+    for s in service.saved_searches:
+        if s.name in wanted:
+            entry = {"name": s.name, "content": s.content}
+            if _is_es_use_case(s):
+                entry["app"] = s.access.get('app')
+            entries.append(entry)
+
+    missing = wanted - {e["name"] for e in entries}
+    if missing:
+        print(f"[ADVERTENCIA] No se encontraron: {', '.join(sorted(missing))}")
+    file_name = _save_backup(entries, file_label, service)
+    print(f"Backup completado: {len(entries)} alertas guardadas en {file_name}")
 
 
 def backup_es_use_cases(service, prefixes=None):

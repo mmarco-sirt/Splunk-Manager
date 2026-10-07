@@ -1,7 +1,7 @@
 from core.clients import get_clients_from_config, manage_clients_cli
 from core.connection import select_client, connect_to_splunk
 from core.paths import backup_dir
-from options.alerts.backup_alerts import backup_alerts, backup_alerts_especific, backup_alerts_custom, backup_es_use_cases, backup_es_use_cases_custom
+from options.alerts.backup_alerts import TECNOLOGIAS, backup_alerts, backup_alerts_especific, backup_alerts_custom, backup_es_use_cases, backup_es_use_cases_custom
 from options.alerts.restore_alerts import restore_alerts
 from options.alerts.list_alerts import list_active_cases
 from options.macros.backup_macros import backup_macros
@@ -14,8 +14,6 @@ from options.reports.backup_reports import backup_reports
 from options.roles.backup_roles import backup_roles
 from options.roles.restore_roles import restore_roles
 from options.batch.batch_mode import batch_backup_alerts, batch_restore_alerts, multi_alert_backup_same_client, batch_restore_multiple_alerts_same_client
-
-TECNOLOGIAS = ["AD", "FW", "AV", "PX", "MAIL", "O365", "MI"]
 
 def get_multiple_clients_selection(all_clients):
     """Abstracción para seleccionar uno o varios clientes de la lista."""
