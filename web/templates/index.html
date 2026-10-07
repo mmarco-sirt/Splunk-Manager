@@ -8,7 +8,10 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
   <script>
     // Aplica el tema guardado antes de pintar para evitar parpadeos
-    try { const t = localStorage.getItem('sm.theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+    try {
+      const t = localStorage.getItem('sm.theme'); if (t) document.documentElement.dataset.theme = t;
+      if (localStorage.getItem('sm.sidebar') === 'collapsed') document.documentElement.dataset.sidebar = 'collapsed';
+    } catch (e) {}
   </script>
 </head>
 <body>
@@ -29,7 +32,7 @@
 
     <div class="main">
       <header class="topbar">
-        <button class="btn btn-icon btn-ghost menu-btn" id="menu-btn" type="button" aria-label="Abrir menú"></button>
+        <button class="btn btn-icon btn-ghost menu-btn" id="menu-btn" type="button" aria-label="Mostrar u ocultar el menú" title="Mostrar u ocultar el menú"></button>
         <div class="client-switcher" id="client-switcher"></div>
         <div class="topbar-spacer"></div>
         <button class="btn btn-ghost tasks-btn" id="tasks-btn" type="button"></button>

@@ -103,6 +103,12 @@ def _do_connect(name):
     return service
 
 
+def server_info(name):
+    """Información del servidor guardada al conectar (versión, nombre...), o None si no hay conexión."""
+    conn = _services.get(name)
+    return conn["info"] if conn else None
+
+
 def disconnect(name):
     with _lock:
         conn = _services.pop(name, None)

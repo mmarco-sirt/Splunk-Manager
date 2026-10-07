@@ -46,13 +46,20 @@ carpeta `backups/` que el CLI y la aplicación de escritorio, así que se pueden
 
 Secciones:
 - **Resumen**: versión y datos del servidor, recuento de objetos, alertas más disparadas e índices por tamaño.
-- **Búsqueda**: búsquedas SPL con rango de tiempo, progreso, cancelación y exportación a CSV/JSON.
+- **Salud de clientes**: todos los clientes de un vistazo (conexión, alertas, planificador y ingesta de las
+  últimas 24 h, y fuentes que han dejado de enviar datos), con el umbral configurable y fuentes que se pueden ignorar.
+- **Búsqueda**: búsquedas SPL con rango de tiempo, progreso, cancelación y exportación a CSV/JSON, en el cliente
+  activo o en **varios clientes a la vez** (resultados unidos con una columna `cliente`, p. ej. para buscar un IOC).
 - **Alertas / Reportes**: listado en vivo con filtros (CU-, Enterprise Security, habilitadas...), detalle con el SPL,
   habilitar/deshabilitar, ejecutar ahora, backup (todas, por tecnología, por texto, ES o selección) y restore.
 - **Macros, Dashboards, Usuarios, Roles**: listado, detalle, backup y restore.
-- **Índices / Apps**: tamaño, ocupación, retención, versiones y estado.
+- **Índices / Apps**: eventos, tamaño, retención y archivado (en Splunk Cloud, datos reales de los indexers),
+  versiones y estado.
+- **Ingesta y licencia**: GB/día de los últimos 7, 30 o 90 días según `license_usage.log`, por índice y sourcetype,
+  con su tendencia.
 - **Backups**: archivos por tipo, visor del contenido, descarga, importación de JSON, borrado y restore
-  (también de solo algunos elementos de un archivo).
+  (también de solo algunos elementos de un archivo), y **historial de versiones** con comparación y restore de
+  una versión anterior.
 - **Operaciones masivas**: un mismo backup o restore en varios clientes a la vez.
 - **Clientes**: alta, edición, borrado y prueba de conexión (las contraseñas nunca se envían al navegador).
 - **Actividad**: cada backup/restore se ejecuta como tarea en segundo plano con su log en vivo.
@@ -61,6 +68,14 @@ Opciones: `--port 8765`, `--host 127.0.0.1`, `--no-browser`. Por defecto solo es
 Para abrirlo a la red (`--host 0.0.0.0`) es obligatorio definir una contraseña de acceso en la variable de
 entorno `SPLUNK_MANAGER_PASSWORD` (el navegador la pedirá; el usuario puede ser cualquiera), ya que la
 aplicación tiene acceso a las credenciales de todos los clientes.
+
+## Historial de backups
+
+Cada backup (desde la web, el CLI o la aplicación de escritorio) guarda además una copia con fecha en
+`backups/<tipo>/historial/<nombre del archivo>/AAAAMMDD-HHMMSS.json`, solo si ha cambiado respecto a la versión
+anterior, y se conservan las 30 más recientes (`MAX_VERSIONS` en `core/backup_files.py`). Al comparar versiones se
+ignoran los campos que Splunk cambia solo (`next_scheduled_time`, `triggered_alert_count`). El archivo "actual"
+sigue teniendo el mismo nombre de siempre, así que los restores del CLI y la GUI no cambian.
 
 ## Restore de usuarios
 

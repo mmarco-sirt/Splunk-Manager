@@ -89,16 +89,19 @@ def capture_output():
 
 
 def _snapshot_backups():
-    """Devuelve {ruta_relativa: mtime} de todos los .json bajo backups/."""
+    """Devuelve {carpeta/archivo: mtime} de los .json de backups/<carpeta>/ (sin el historial)."""
     snapshot = {}
     if not os.path.isdir(BACKUP_ROOT):
         return snapshot
-    for folder, _, files in os.walk(BACKUP_ROOT):
-        for name in files:
-            if name.endswith(".json"):
-                path = os.path.join(folder, name)
+    for folder in os.listdir(BACKUP_ROOT):
+        folder_path = os.path.join(BACKUP_ROOT, folder)
+        if not os.path.isdir(folder_path):
+            continue
+        for name in os.listdir(folder_path):
+            path = os.path.join(folder_path, name)
+            if name.endswith(".json") and os.path.isfile(path):
                 try:
-                    snapshot[os.path.relpath(path, BACKUP_ROOT).replace(os.sep, "/")] = os.path.getmtime(path)
+                    snapshot[f"{folder}/{name}"] = os.path.getmtime(path)
                 except OSError:
                     pass
     return snapshot

@@ -222,17 +222,39 @@ export const rolesView = listView({
 
 // --- Índices -----------------------------------------------------------------
 
+const fmtPct = (n) => (n > 0 && n < 0.01 ? '< 0,01 %' : `${n.toLocaleString('es-ES', { maximumFractionDigits: n < 1 ? 2 : 1 })} %`);
+
 function sizeCell(r) {
-  if (!r.max_size_mb) return fmtMB(r.size_mb);
-  const pct = Math.min(100, (r.size_mb / r.max_size_mb) * 100);
-  return h('div', { title: `${fmtMB(r.size_mb)} de ${fmtMB(r.max_size_mb)} (${pct.toFixed(1)} %)`, style: { minWidth: '130px' } },
-    h('div', { class: 'num', style: { textAlign: 'left' } }, fmtMB(r.size_mb), h('span', { class: 'muted' }, ` / ${fmtMB(r.max_size_mb)}`)),
-    h('div', { class: `meter ${pct > 90 ? 'bad' : pct > 75 ? 'warn' : ''}`, style: { marginTop: '4px' } }, h('span', { style: { width: `${pct}%` } })));
+  if (r.size_mb === null) {
+    return h('span', { class: 'muted', title: 'Splunk Cloud no expone el tamaño de los índices internos' }, '—');
+  }
+  const kind = r.size_kind === 'raw' ? ' sin comprimir' : '';
+  // Con límite de tamaño: ocupación respecto al límite. Sin límite (Splunk Cloud): peso sobre el total del cliente
+  const limited = r.max_size_mb > 0;
+  const pct = limited ? Math.min(100, (r.size_mb / r.max_size_mb) * 100) : r.share * 100;
+  const title = limited
+    ? `${fmtMB(r.size_mb)}${kind} de ${fmtMB(r.max_size_mb)} (${fmtPct(pct)})`
+    : `${fmtMB(r.size_mb)}${kind} · ${fmtPct(pct)} del volumen total de los índices`;
+  return h('div', { title, style: { minWidth: '150px' } },
+    h('div', { class: 'num', style: { textAlign: 'left' } }, fmtMB(r.size_mb),
+      h('span', { class: 'muted' }, limited ? ` / ${fmtMB(r.max_size_mb)}` : ` · ${fmtPct(pct)}`)),
+    h('div', { class: `meter ${limited && pct > 90 ? 'bad' : limited && pct > 75 ? 'warn' : ''}`, style: { marginTop: '4px' } },
+      h('span', { style: { width: `${Math.max(pct, 0.5)}%` } })));
+}
+
+function retentionCell(r) {
+  if (!r.retention_days) return h('span', { class: 'muted' }, '—');
+  return h('div', {}, `${fmtNum(r.retention_days)} días`,
+    r.archive_days ? h('div', { class: 'cell-sub', title: 'Archivado activo (DDAA)' }, `+ ${fmtNum(r.archive_days)} días de archivo`) : null);
 }
 
 export const indexesView = listView({
   id: 'indexes', title: 'Índices', iconName: 'database', resource: 'indexes',
-  subtitle: () => `Índices de ${state.client}: volumen, ocupación y retención.`,
+  subtitle: () => `Índices de ${state.client}: eventos, volumen, retención y archivado. En Splunk Cloud el tamaño es el de los datos sin comprimir y los índices internos no lo exponen.`,
+  prepare: (rows) => {
+    const total = rows.reduce((sum, r) => sum + (r.size_mb || 0), 0);
+    return rows.map((r) => ({ ...r, share: total && r.size_mb ? r.size_mb / total : 0 }));
+  },
   table: {
     searchText: (r) => r.name,
     searchPlaceholder: 'Buscar índice…',
@@ -250,9 +272,9 @@ export const indexesView = listView({
       { key: 'name', label: 'Índice', render: (r) => h('div', {}, h('span', { class: 'cell-main' }, r.name), r.disabled ? h('div', {}, badge('Deshabilitado', 'outline')) : null) },
       { key: 'datatype', label: 'Tipo', render: (r) => badge(r.datatype === 'metric' ? 'Métricas' : 'Eventos', r.datatype === 'metric' ? 'accent' : '') },
       { key: 'events', label: 'Eventos', className: 'num', defaultDir: 'desc', render: (r) => fmtNum(r.events) },
-      { key: 'size_mb', label: 'Tamaño', defaultDir: 'desc', render: sizeCell },
-      { key: 'retention_days', label: 'Retención', className: 'num', defaultDir: 'desc', render: (r) => (r.retention_days ? `${fmtNum(r.retention_days)} días` : '—') },
-      { key: 'max_time', label: 'Último evento', defaultDir: 'desc', render: (r) => (r.max_time ? h('span', { title: r.max_time }, fmtRelative(r.max_time)) : h('span', { class: 'muted' }, '—')) },
+      { key: 'size_mb', label: 'Tamaño', defaultDir: 'desc', sort: (r) => r.size_mb ?? -1, render: sizeCell },
+      { key: 'retention_days', label: 'Retención', defaultDir: 'desc', render: retentionCell },
+      { key: 'max_time', label: 'Último evento', defaultDir: 'desc', sort: (r) => r.max_time || 0, render: (r) => (r.max_time ? h('span', { title: fmtDate(r.max_time) }, fmtRelative(r.max_time)) : h('span', { class: 'muted' }, '—')) },
     ],
   },
 });

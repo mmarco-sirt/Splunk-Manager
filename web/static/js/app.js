@@ -8,6 +8,8 @@ import { h, append, clear, icon, button, errorBox, emptyState } from './ui.js';
 import { invalidateBackups } from './ops.js';
 import overview, { clientCards } from './views/overview.js';
 import search from './views/search.js';
+import health from './views/health.js';
+import ingest from './views/ingest.js';
 import { alertsView, reportsView } from './views/savedsearches.js';
 import { macrosView, dashboardsView, usersView, rolesView, indexesView, appsView } from './views/objects.js';
 import backups from './views/backups.js';
@@ -16,10 +18,10 @@ import clients from './views/clients.js';
 import activity, { openJobDrawer } from './views/activity.js';
 
 const NAV = [
-  { title: 'General', items: [overview, search] },
+  { title: 'General', items: [overview, health, search] },
   { title: 'Objetos', items: [alertsView, reportsView, macrosView, dashboardsView] },
   { title: 'Acceso', items: [usersView, rolesView] },
-  { title: 'Plataforma', items: [indexesView, appsView] },
+  { title: 'Plataforma', items: [indexesView, ingest, appsView] },
   { title: 'Gestión', items: [backups, batch, clients, activity] },
 ];
 const VIEWS = new Map(NAV.flatMap((g) => g.items).map((v) => [v.id, v]));
@@ -28,22 +30,43 @@ const $ = (id) => document.getElementById(id);
 
 // --- Barra lateral -----------------------------------------------------------
 
+const mobileLayout = matchMedia('(max-width: 960px)');
+
+const isCollapsed = () => document.documentElement.dataset.sidebar === 'collapsed';
+
 function renderNav(activeId) {
   const nav = clear($('nav'));
+  const collapsed = isCollapsed() && !mobileLayout.matches;
   for (const group of NAV) {
     nav.append(h('div', { class: 'nav-group' },
       h('div', { class: 'nav-group-title' }, group.title),
       group.items.map((v) => h('a', {
         class: `nav-item ${v.id === activeId ? 'active' : ''} ${v.needsClient ? 'needs-client' : ''}`,
         href: `#/${v.id}`,
+        title: collapsed ? v.title : null,
         'aria-current': v.id === activeId ? 'page' : null,
-      }, icon(v.icon), v.title))));
+      }, icon(v.icon), h('span', { class: 'nav-label' }, v.title)))));
   }
 }
 
+// En móvil la barra lateral se abre por encima del contenido
 function setSidebar(open) {
   $('sidebar').classList.toggle('open', open);
   $('sidebar-scrim').classList.toggle('open', open);
+}
+
+// En escritorio se pliega a una columna de iconos y se recuerda la preferencia
+function setCollapsed(collapsed) {
+  if (collapsed) document.documentElement.dataset.sidebar = 'collapsed';
+  else delete document.documentElement.dataset.sidebar;
+  try { localStorage.setItem('sm.sidebar', collapsed ? 'collapsed' : 'expanded'); } catch { /* sin almacenamiento */ }
+  renderNav(currentView().id);
+  renderThemeToggle();
+}
+
+function toggleSidebar() {
+  if (mobileLayout.matches) setSidebar(!$('sidebar').classList.contains('open'));
+  else setCollapsed(!isCollapsed());
 }
 
 // --- Tema --------------------------------------------------------------------
@@ -55,7 +78,10 @@ function effectiveTheme() {
 
 function renderThemeToggle() {
   const dark = effectiveTheme() === 'dark';
-  clear($('theme-toggle')).append(icon(dark ? 'sun' : 'moon'), dark ? 'Tema claro' : 'Tema oscuro');
+  const label = dark ? 'Tema claro' : 'Tema oscuro';
+  const toggle = clear($('theme-toggle'));
+  toggle.title = isCollapsed() && !mobileLayout.matches ? label : '';
+  toggle.append(icon(dark ? 'sun' : 'moon'), h('span', { class: 'nav-label' }, label));
 }
 
 function toggleTheme() {
@@ -214,7 +240,8 @@ async function init() {
   renderTasksButton();
   $('theme-toggle').addEventListener('click', toggleTheme);
   $('menu-btn').append(icon('menu'));
-  $('menu-btn').addEventListener('click', () => setSidebar(!$('sidebar').classList.contains('open')));
+  $('menu-btn').addEventListener('click', toggleSidebar);
+  mobileLayout.addEventListener('change', () => { setSidebar(false); renderNav(currentView().id); renderThemeToggle(); });
   $('sidebar-scrim').addEventListener('click', () => setSidebar(false));
   $('tasks-btn').addEventListener('click', () => navigate('activity'));
 

@@ -10,6 +10,7 @@ from core.clients import ensure_config_exists
 from core.paths import backup_dir
 from options.alerts.backup_alerts import TECNOLOGIAS
 from web import explorer, operations, services
+from web.health import monitor as health_monitor
 from web.jobs import install_output_router, jobs
 from web.operations import BACKUP_FOLDERS, OperationError
 from web.services import ClientError
@@ -151,6 +152,24 @@ def create_app(password=None, restrict_host=True):
         return jsonify(explorer.saved_search_action(
             service, data.get("name"), data.get("app"), data.get("owner"), data.get("action")))
 
+    @app.get("/api/ingest")
+    def ingest():
+        service = services.get_service(client_param())
+        return jsonify(explorer.ingest_usage(service, int(request.args.get("days", 30))))
+
+    # --- Salud de todos los clientes ---
+
+    @app.get("/api/health")
+    def health_get():
+        return jsonify(health_monitor.snapshot())
+
+    @app.post("/api/health/run")
+    def health_run():
+        known = [c["name"] for c in services.list_clients()]
+        requested = body().get("clients") or known
+        health_monitor.run([c for c in requested if c in known])
+        return jsonify(health_monitor.snapshot()), 202
+
     # --- Búsqueda SPL ---
 
     @app.post("/api/search")
@@ -230,6 +249,24 @@ def create_app(password=None, restrict_host=True):
     @app.get("/api/backups/<folder>/<filename>")
     def backups_read(folder, filename):
         return jsonify(operations.read_backup(folder, filename))
+
+    @app.get("/api/backups/<folder>/<filename>/versions")
+    def backups_versions(folder, filename):
+        return jsonify(operations.backup_versions(folder, filename))
+
+    @app.get("/api/backups/<folder>/<filename>/versions/<version>")
+    def backups_version_read(folder, filename, version):
+        return jsonify(operations.read_backup(folder, filename, version))
+
+    @app.get("/api/backups/<folder>/<filename>/versions/<version>/download")
+    def backups_version_download(folder, filename, version):
+        path = operations.version_path(folder, filename, version)
+        name = f"{filename[:-5]}_{version}"
+        return send_file(path, as_attachment=True, download_name=name, mimetype="application/json")
+
+    @app.get("/api/backups/<folder>/<filename>/diff")
+    def backups_diff(folder, filename):
+        return jsonify(operations.diff_backup(folder, filename, request.args.get("from"), request.args.get("to", "current")))
 
     @app.get("/api/backups/<folder>/<filename>/download")
     def backups_download(folder, filename):

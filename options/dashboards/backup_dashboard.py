@@ -1,6 +1,7 @@
 import os
 import json
 
+from core.backup_files import write_backup
 from core.paths import backup_dir
 
 BACKUP_FOLDER = "dashboards"
@@ -14,8 +15,7 @@ def backup_dashboard(service, dashboard_name):
         content = data["entry"][0]["content"]
 
         file_path = os.path.join(backup_dir(BACKUP_FOLDER), f"{dashboard_name}_backup.json")
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(content, f, indent=4)
+        write_backup(file_path, content)
 
         print(f"✅ Dashboard '{dashboard_name}' respaldado en '{file_path}'")
 

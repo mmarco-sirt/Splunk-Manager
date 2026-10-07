@@ -1,6 +1,6 @@
-import json
 import os
 
+from core.backup_files import write_backup
 from core.paths import backup_dir, host_tag
 
 BACKUP_FOLDER = "macros"
@@ -18,7 +18,6 @@ def backup_macros(service):
         })
 
     file_name = os.path.join(backup_dir(BACKUP_FOLDER), f"macros_{host_tag(service)}_backup.json")
-    with open(file_name, "w", encoding="utf-8") as file:
-        json.dump(macros_backup, file, indent=4)
+    write_backup(file_name, macros_backup)
 
     print(f"Backup completado: {len(macros_backup)} macros guardadas en {file_name}")

@@ -1,11 +1,12 @@
 """Operaciones de backup/restore lanzadas desde la web, reutilizando las funciones de options/."""
+import difflib
 import json
 import os
 import re
 import shutil
 import tempfile
 
-from core.backup_files import list_backup_files
+from core.backup_files import history_dir, list_backup_files, list_versions, without_volatile, write_backup
 from core.paths import backup_dir
 from options.alerts.backup_alerts import (
     TECNOLOGIAS, backup_alerts, backup_alerts_especific, backup_alerts_custom, backup_alerts_by_name,
@@ -130,22 +131,29 @@ def build_restore(folder, files, options):
     items = [str(i) for i in options.get("items") or []]
     if items and (len(paths) != 1 or not BACKUP_FOLDERS[folder]["key"]):
         raise OperationError("Solo se pueden elegir elementos concretos al restaurar un único archivo.")
+    version = options.get("version")
+    if version and len(paths) != 1:
+        raise OperationError("Solo se puede restaurar una versión anterior de un único archivo.")
+    source = version_path(folder, files[0], version) if version else None
 
     restore = BACKUP_FOLDERS[folder]["restore"]
     label = BACKUP_FOLDERS[folder]["label"].lower()
 
     def run(service):
         for path in paths:
-            print(f"\n▶ Restaurando {os.path.basename(path)}")
+            suffix = f" (versión del {version_label(version)})" if version else ""
+            print(f"\n▶ Restaurando {os.path.basename(path)}{suffix}")
             try:
-                if items:
-                    _restore_items(service, folder, path, items, restore, opts)
+                if items or source:
+                    _restore_copy(service, folder, source or path, os.path.basename(path), items, restore, opts)
                 else:
                     restore(service, path, opts)
             except Exception as e:
                 print(f"❌ Error en la restauración de {os.path.basename(path)}: {e}")
 
     title = f"Restore de {label}: {files[0]}" if len(files) == 1 else f"Restore de {len(files)} archivos de {label}"
+    if version:
+        title += f" · versión del {version_label(version)}"
     if items:
         title += f" ({len(items)} elementos)"
     return title, run
@@ -155,23 +163,140 @@ def _item_name(entry, key):
     return entry.get(key) or entry.get("name") if isinstance(entry, dict) else None
 
 
-def _restore_items(service, folder, path, items, restore, opts):
-    """Restaura solo los elementos indicados, mediante una copia filtrada del archivo con el mismo nombre."""
-    key = BACKUP_FOLDERS[folder]["key"]
-    with open(path, "r", encoding="utf-8") as f:
+def _restore_copy(service, folder, source, original_name, items, restore, opts):
+    """
+    Restaura desde una copia temporal con el nombre original del archivo (el restore de dashboards saca el id
+    del nombre). Sirve para restaurar una versión del historial y/o solo algunos elementos.
+    """
+    with open(source, "r", encoding="utf-8") as f:
         data = json.load(f)
-    wanted = set(items)
-    selected = [entry for entry in data if _item_name(entry, key) in wanted]
-    print(f"Elementos seleccionados: {len(selected)} de {len(data)}")
+    if items:
+        key = BACKUP_FOLDERS[folder]["key"]
+        wanted = set(items)
+        selected = [entry for entry in data if _item_name(entry, key) in wanted]
+        print(f"Elementos seleccionados: {len(selected)} de {len(data)}")
+        data = selected
 
     temp_dir = tempfile.mkdtemp(prefix="splunk_manager_")
     try:
-        temp_path = os.path.join(temp_dir, os.path.basename(path))
+        temp_path = os.path.join(temp_dir, original_name)
         with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(selected, f, indent=4)
+            json.dump(data, f, indent=4)
         restore(service, temp_path, opts)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# --- Historial de versiones ---
+
+def version_label(version_id):
+    """'20261007-170512.json' -> '07/10/2026 17:05:12'"""
+    stamp = version_id[:15]
+    return f"{stamp[6:8]}/{stamp[4:6]}/{stamp[0:4]} {stamp[9:11]}:{stamp[11:13]}:{stamp[13:15]}"
+
+
+def version_path(folder, filename, version_id):
+    """Ruta segura a una versión del historial de backups/<folder>/<filename>."""
+    path = backup_path(folder, filename)
+    if not version_id or version_id != os.path.basename(version_id) or not version_id.endswith(".json"):
+        raise OperationError("Versión no válida.")
+    full = os.path.join(history_dir(path), version_id)
+    if not os.path.isfile(full):
+        raise OperationError(f"No existe la versión {version_id}.")
+    return full
+
+
+def backup_versions(folder, filename):
+    """Versiones del historial de un backup con su nº de elementos, de la más reciente a la más antigua."""
+    path = backup_path(folder, filename)
+    versions = list_versions(path)
+    for v in versions:
+        v["items"] = _count_items(os.path.join(history_dir(path), v["id"]))
+    return versions
+
+
+def _load(folder, filename, version_id=None):
+    if version_id in (None, "", "current"):
+        path = backup_path(folder, filename)
+    else:
+        path = version_path(folder, filename, version_id)
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _flatten(value, prefix=""):
+    """Aplana diccionarios para comparar campo a campo ({'content': {'search': x}} -> {'search': x})."""
+    if not isinstance(value, dict):
+        return {prefix or "valor": value}
+    flat = {}
+    for k, v in value.items():
+        name = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            flat.update(_flatten(v, "" if k == "content" and not prefix else name))
+        else:
+            flat[name] = v
+    return flat
+
+
+def _as_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "\n".join(str(v) for v in value)
+    return str(value)
+
+
+_MISSING = object()
+MAX_DIFF_LINES = 400
+
+
+def _diff_fields(old, new):
+    old_flat, new_flat = _flatten(old), _flatten(new)
+    fields = []
+    for field in sorted(set(old_flat) | set(new_flat)):
+        before, after = old_flat.get(field, _MISSING), new_flat.get(field, _MISSING)
+        if before == after:
+            continue
+        before_text = "" if before is _MISSING else _as_text(before)
+        after_text = "" if after is _MISSING else _as_text(after)
+        diff = None
+        if "\n" in before_text + after_text or max(len(before_text), len(after_text)) > 80:
+            lines = difflib.unified_diff(before_text.splitlines(), after_text.splitlines(), lineterm="", n=2)
+            diff = list(lines)[2:MAX_DIFF_LINES + 2]  # sin las cabeceras ---/+++
+        fields.append({
+            "field": field,
+            "before": None if before is _MISSING else before_text,
+            "after": None if after is _MISSING else after_text,
+            "diff": diff,
+        })
+    return fields
+
+
+def diff_backup(folder, filename, old_id, new_id):
+    """Compara dos versiones de un backup ('current' es el archivo actual), ignorando los campos volátiles."""
+    old = without_volatile(_load(folder, filename, old_id))
+    new = without_volatile(_load(folder, filename, new_id))
+    key = BACKUP_FOLDERS[folder]["key"]
+    if key and isinstance(old, list) and isinstance(new, list):
+        old_map = {_item_name(e, key) or f"#{i}": e for i, e in enumerate(old)}
+        new_map = {_item_name(e, key) or f"#{i}": e for i, e in enumerate(new)}
+    else:
+        old_map, new_map = {filename: old}, {filename: new}
+
+    common = set(old_map) & set(new_map)
+    changed = []
+    for name in sorted(common):
+        fields = _diff_fields(old_map[name], new_map[name])
+        if fields:
+            changed.append({"name": name, "fields": fields})
+    return {
+        "from": old_id,
+        "to": new_id,
+        "added": sorted(set(new_map) - set(old_map)),
+        "removed": sorted(set(old_map) - set(new_map)),
+        "changed": changed,
+        "unchanged": len(common) - len(changed),
+    }
 
 
 def run_for_clients(clients, action):
@@ -200,7 +325,8 @@ def describe_backups():
         for name in list_backup_files(folder, meta["prefix"]):
             path = os.path.join(backup_dir(folder), name)
             stat = os.stat(path)
-            files.append({"name": name, "size": stat.st_size, "mtime": stat.st_mtime, "items": _count_items(path)})
+            files.append({"name": name, "size": stat.st_size, "mtime": stat.st_mtime, "items": _count_items(path),
+                          "versions": len(list_versions(path))})
         result[folder] = {"label": meta["label"], "prefix": meta["prefix"], "files": files}
     return result
 
@@ -214,14 +340,12 @@ def _count_items(path):
         return None
 
 
-def read_backup(folder, filename):
-    """Contenido de un backup y la lista de nombres de sus elementos (para elegir qué restaurar)."""
-    path = backup_path(folder, filename)
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+def read_backup(folder, filename, version_id=None):
+    """Contenido de un backup (o de una versión de su historial) y los nombres de sus elementos."""
+    data = _load(folder, filename, version_id)
     key = BACKUP_FOLDERS[folder]["key"]
     names = [_item_name(e, key) for e in data] if key and isinstance(data, list) else []
-    return {"folder": folder, "name": filename, "data": data, "items": [n for n in names if n]}
+    return {"folder": folder, "name": filename, "version": version_id, "data": data, "items": [n for n in names if n]}
 
 
 def save_uploaded_backup(folder, filename, content):
@@ -248,7 +372,5 @@ def save_uploaded_backup(folder, filename, content):
     if folder != "dashboards" and not isinstance(data, list):
         raise OperationError("El backup debe ser una lista JSON de elementos.")
 
-    path = backup_path(folder, filename)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+    write_backup(backup_path(folder, filename), data)
     return filename

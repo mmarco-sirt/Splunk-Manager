@@ -1,6 +1,6 @@
-import json
 import os
 
+from core.backup_files import write_backup
 from core.paths import backup_dir, host_tag
 
 BACKUP_FOLDER = "alertas"
@@ -22,8 +22,7 @@ def _save_backup(entries, file_label, service):
     """Guarda las entradas en backups/alertas/alertas_<file_label>_<host>_backup.json."""
     name = f"alertas_{file_label}_{host_tag(service)}" if file_label else f"alertas_{host_tag(service)}"
     file_name = os.path.join(backup_dir(BACKUP_FOLDER), f"{name}_backup.json")
-    with open(file_name, "w", encoding="utf-8") as file:
-        json.dump(entries, file, indent=4)
+    write_backup(file_name, entries)
     return file_name
 
 

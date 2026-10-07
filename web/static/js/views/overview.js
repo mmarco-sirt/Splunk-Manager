@@ -108,7 +108,8 @@ function renderDashboard(root, client) {
       label: 'Índices', iconName: 'database', route: 'indexes', resource: 'indexes',
       compute: (rows) => {
         const own = rows.filter((r) => !r.name.startsWith('_'));
-        return { value: own.length, meta: [h('b', {}, fmtMB(rows.reduce((s, r) => s + r.size_mb, 0))), ' en total'] };
+        const raw = rows.some((r) => r.size_kind === 'raw');
+        return { value: own.length, meta: [h('b', {}, fmtMB(rows.reduce((s, r) => s + (r.size_mb || 0), 0))), raw ? ' sin comprimir' : ' en total'] };
       },
     }),
     tile({ label: 'Apps', iconName: 'apps', route: 'apps', resource: 'apps', compute: (rows) => ({ value: rows.length, meta: [h('b', {}, fmtNum(rows.filter((r) => !r.disabled).length)), ' habilitadas'] }) }));
@@ -122,9 +123,9 @@ function renderDashboard(root, client) {
       });
     }));
 
-  const indexes = card('Índices por tamaño', 'Los 10 índices que más ocupan',
+  const indexes = card('Índices por tamaño', 'Los 10 índices que más ocupan (en Splunk Cloud, datos sin comprimir)',
     asyncBody(loadResource('indexes'), (rows) => {
-      const top = [...rows].sort((a, b) => b.size_mb - a.size_mb).slice(0, 10).filter((r) => r.size_mb > 0);
+      const top = [...rows].sort((a, b) => (b.size_mb || 0) - (a.size_mb || 0)).slice(0, 10).filter((r) => r.size_mb > 0);
       if (!top.length) return emptyState({ iconName: 'database', title: 'Sin datos de tamaño', text: 'Splunk no devolvió tamaños de índices.' });
       return barList(top.map((r) => ({ label: r.name, value: r.size_mb, events: r.events })), {
         valueFormat: fmtMB,

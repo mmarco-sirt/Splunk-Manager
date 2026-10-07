@@ -173,7 +173,7 @@ export function restoreOptions(folder) {
   return {
     el,
     // Se llama cuando cambia la selección de archivos: con un único archivo se pueden elegir elementos concretos
-    setFiles(files) {
+    setFiles(files, version = null) {
       clear(itemsSlot);
       itemPicker = null;
       if (!itemized || files.length !== 1) return;
@@ -184,7 +184,7 @@ export function restoreOptions(folder) {
         clear(box);
         itemPicker = null;
         if (toggle.checked) {
-          itemPicker = itemsPicker(folder, files[0]);
+          itemPicker = itemsPicker(folder, files[0], version);
           box.append(itemPicker.el);
         }
       });
@@ -201,7 +201,7 @@ export function restoreOptions(folder) {
   };
 }
 
-function itemsPicker(folder, file) {
+function itemsPicker(folder, file, version) {
   const selected = new Set();
   const list = h('div', { class: 'item-picker-list' }, loadingRows(3));
   const counter = h('span', { class: 'muted' });
@@ -230,7 +230,8 @@ function itemsPicker(folder, file) {
   });
   filter.addEventListener('input', render);
 
-  get(`/api/backups/${enc(folder)}/${enc(file)}`).then((data) => {
+  const url = `/api/backups/${enc(folder)}/${enc(file)}${version ? `/versions/${enc(version)}` : ''}`;
+  get(url).then((data) => {
     items = data.items;
     items.forEach((n) => selected.add(n));
     render();
@@ -243,19 +244,32 @@ function itemsPicker(folder, file) {
   };
 }
 
-export function openRestoreModal({ folder, clients = [state.client], files = [] }) {
+/**
+ * Diálogo de restore. Con 'version' ({ id, time }) restaura esa versión del historial del único archivo indicado.
+ */
+export function openRestoreModal({ folder, clients = [state.client], files = [], version = null }) {
   const label = state.meta?.folders?.[folder]?.label || folder;
-  const picker = fileListPicker(folder, { multi: true, preselected: files });
   const options = restoreOptions(folder);
-  picker.onChange = (selected) => options.setFiles(selected);
+  let picker = null;
+  let source;
+  if (version) {
+    options.setFiles([files[0]], version.id);
+    source = h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Origen'),
+      h('div', { class: 'file-item selected', style: { border: '1px solid var(--border)', borderRadius: 'var(--radius)', cursor: 'default' } },
+        icon('history'), h('span', { class: 'fi-name' }, files[0]), h('span', { class: 'fi-meta' }, `versión del ${fmtDate(version.time)}`)));
+  } else {
+    picker = fileListPicker(folder, { multi: true, preselected: files });
+    picker.onChange = (selected) => options.setFiles(selected);
+    source = h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Archivos de backup'), picker.el);
+  }
 
   openModal({
-    title: `Restaurar ${label.toLowerCase()}`,
+    title: version ? `Restaurar versión de ${label.toLowerCase()}` : `Restaurar ${label.toLowerCase()}`,
     subtitle: `Destino: ${clientsLabel(clients)}`,
     size: 'lg',
     body: [
       infoBox(`Los objetos del backup se crean en ${clientsLabel(clients)} y los que ya existan con el mismo nombre se sobrescriben.`, 'warn-box'),
-      h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Archivos de backup'), picker.el),
+      source,
       options.el,
     ],
     actions: [
@@ -263,9 +277,10 @@ export function openRestoreModal({ folder, clients = [state.client], files = [] 
       {
         label: `Restaurar en ${clientsLabel(clients)}`, variant: 'primary', icon: 'restore',
         onClick: async () => {
-          const selected = picker.selected();
+          const selected = picker ? picker.selected() : [files[0]];
           if (!selected.length) throw new Error('Seleccione al menos un archivo.');
-          await startJob('/api/ops/restore', { clients, folder, files: selected, options: options.value() }, { folder });
+          const opts = { ...options.value(), ...(version ? { version: version.id } : {}) };
+          await startJob('/api/ops/restore', { clients, folder, files: selected, options: opts }, { folder });
         },
       },
     ],

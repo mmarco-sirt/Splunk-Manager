@@ -1,6 +1,6 @@
-import json
 import os
 
+from core.backup_files import write_backup
 from core.paths import backup_dir, host_tag
 
 BACKUP_FOLDER = "users"
@@ -18,7 +18,6 @@ def backup_users(service):
         })
 
     file_name = os.path.join(backup_dir(BACKUP_FOLDER), f"users_{host_tag(service)}_backup.json")
-    with open(file_name, "w", encoding="utf-8") as file:
-        json.dump(users_backup, file, indent=4)
+    write_backup(file_name, users_backup)
 
     print(f"Backup completado: {len(users_backup)} usuarios guardados en {file_name}")
