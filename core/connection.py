@@ -1,5 +1,5 @@
 import splunklib.client
-import os
+
 
 def select_client(clients):
     """Permite seleccionar un cliente de la lista."""
@@ -16,10 +16,11 @@ def select_client(clients):
         except ValueError:
             print("Entrada no válida, ingrese un número.")
 
+
 def connect_to_splunk(client):
-    """Establece la conexión a Splunk usando usuario/contraseña o token."""
+    """Establece la conexión a Splunk usando usuario/contraseña o, si no hay, token."""
     try:
-        # Prioritize username/password authentication
+        # Prioriza usuario/contraseña
         if client.get("username") and client.get("password"):
             service = splunklib.client.connect(
                 host=client["host"],
@@ -29,7 +30,7 @@ def connect_to_splunk(client):
             )
             print(f"Conectado a Splunk como: {client['username']}")
             return service
-        # Fallback to token authentication
+        # Alternativa: token
         elif client.get("splunkToken"):
             service = splunklib.client.connect(
                 host=client["host"],
@@ -44,10 +45,3 @@ def connect_to_splunk(client):
     except Exception as e:
         print(f"Error al conectar a Splunk: {e}")
         return None
-
-BACKUP_DIR = "backups"
-
-def ensure_backup_dir():
-    """Verifica que la carpeta 'backups/' exista y la crea si es necesario."""
-    if not os.path.exists(BACKUP_DIR):
-        os.makedirs(BACKUP_DIR)

@@ -1,24 +1,24 @@
 import json
 import os
 
-BACKUP_DIR = "backups/users"
+from core.paths import backup_dir, host_tag
+
+BACKUP_FOLDER = "users"
 
 def backup_users(service):
-    """Realiza un backup de los usuarios de Splunk en un archivo JSON dentro de 'backups/users/'."""
-    if not os.path.exists(BACKUP_DIR):
-        os.makedirs(BACKUP_DIR)
-    
+    """Realiza un backup de los usuarios de Splunk en un archivo JSON dentro de 'backups/users/'.
+    Splunk no expone las contraseñas, por lo que el backup no las incluye."""
     users_backup = []
     for user in service.users:
         users_backup.append({
-            "name": user.name,
+            "username": user.name,
             "roles": user.roles,
             "email": user.content.get("email", ""),
             "realname": user.content.get("realname", "")
         })
-    
-    file_name = f"{BACKUP_DIR}/users_{service.host.split('.')[0]}_backup.json"
-    with open(file_name, "w") as file:
+
+    file_name = os.path.join(backup_dir(BACKUP_FOLDER), f"users_{host_tag(service)}_backup.json")
+    with open(file_name, "w", encoding="utf-8") as file:
         json.dump(users_backup, file, indent=4)
-    
-    print(f"Backup completado: usuarios guardados en {file_name}")
+
+    print(f"Backup completado: {len(users_backup)} usuarios guardados en {file_name}")

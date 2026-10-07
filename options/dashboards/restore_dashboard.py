@@ -1,50 +1,39 @@
 import os
 import json
 
-BACKUP_DIR = "backups/dashboards"
+from splunklib.binding import HTTPError
 
-def list_dashboard_backups():
-    """Lista los archivos de backup disponibles para dashboards."""
-    if not os.path.exists(BACKUP_DIR):
-        os.makedirs(BACKUP_DIR)
-        return []
-    return [f for f in os.listdir(BACKUP_DIR) if f.endswith("_backup.json")]
+from core.backup_files import choose_backup_file
+
+BACKUP_FOLDER = "dashboards"
 
 def restore_dashboard(service, file_path=None):
-    """Restaura un dashboard desde un archivo de backup."""
+    """Restaura un dashboard desde un archivo de backup (si no se indica, se pide por consola)."""
+    file_path = file_path or choose_backup_file(BACKUP_FOLDER, "", "backup de dashboards")
+    if not file_path:
+        return
+
     try:
-        if not file_path:
-            files = list_dashboard_backups()
-            if not files:
-                print("No hay backups de dashboards disponibles.")
-                return
-            print("Dashboards disponibles para restaurar:")
-            for i, file in enumerate(files, 1):
-                print(f"{i}. {file}")
-            index = int(input("Seleccione el dashboard a restaurar: ")) - 1
-            if not (0 <= index < len(files)):
-                print("Opción inválida.")
-                return
-            file_path = os.path.join(BACKUP_DIR, files[index])
-        
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             content = json.load(f)
 
         # Usamos el nombre del archivo para obtener el ID del dashboard
         dashboard_id = os.path.splitext(os.path.basename(file_path))[0].replace("_backup", "")
 
         # Verificamos si ya existe el dashboard
-        existing = None
+        exists = True
         try:
-            existing = service.get(f"/services/data/ui/views/{dashboard_id}?output_mode=json")
-        except:
-            pass  # No existe, lo crearemos
+            service.get(f"/services/data/ui/views/{dashboard_id}", output_mode="json")
+        except HTTPError as he:
+            if he.status != 404:
+                raise
+            exists = False  # No existe, lo crearemos
 
         # Filtrar solo los campos válidos para POST
         allowed_keys = {"eai:data"}
         filtered_content = {k: v for k, v in content.items() if k in allowed_keys}
 
-        if existing:
+        if exists:
             service.post(f"/services/data/ui/views/{dashboard_id}", **filtered_content)
             print(f"✅ Dashboard '{dashboard_id}' actualizado.")
         else:

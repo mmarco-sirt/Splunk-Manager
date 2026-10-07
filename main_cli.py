@@ -1,20 +1,19 @@
-from config import clientes, clientes_token
-from utils import select_client, connect_to_splunk, ensure_backup_dir
-from utils_token import select_client_token, connect_to_splunk_token
+from core.clients import get_clients_from_config, manage_clients_cli
+from core.connection import select_client, connect_to_splunk
+from core.paths import backup_dir
 from options.alerts.backup_alerts import backup_alerts, backup_alerts_especific, backup_alerts_custom, backup_es_use_cases, backup_es_use_cases_custom
-from options.alerts.restore_alerts import restore_alerts, restore_alerts_es
+from options.alerts.restore_alerts import restore_alerts
 from options.alerts.list_alerts import list_active_cases
 from options.macros.backup_macros import backup_macros
 from options.macros.restore_macros import restore_macros
 from options.users.backup_users import backup_users
-from options.users.restore_users import restore_users, restore_users2
+from options.users.restore_users import restore_users
 from options.dashboards.backup_dashboard import backup_dashboard
 from options.dashboards.restore_dashboard import restore_dashboard
 from options.reports.backup_reports import backup_reports
 from options.roles.backup_roles import backup_roles
 from options.roles.restore_roles import restore_roles
-from batch_mode import batch_backup_alerts, batch_restore_alerts, multi_alert_backup_same_client, batch_restore_multiple_alerts_same_client
-from options.clientes.manage_clients import main as manage_clients_main
+from options.batch.batch_mode import batch_backup_alerts, batch_restore_alerts, multi_alert_backup_same_client, batch_restore_multiple_alerts_same_client
 
 TECNOLOGIAS = ["AD", "FW", "AV", "PX", "MAIL", "O365", "MI"]
 
@@ -34,19 +33,26 @@ def get_multiple_clients_selection(all_clients):
         return []
 
 def main():
-    ensure_backup_dir()  # Asegurar que la carpeta 'backups/' existe
+    backup_dir()  # Asegurar que la carpeta 'backups/' existe
+
+    clientes = get_clients_from_config()
+    if not clientes:
+        print("No hay clientes configurados. Añada uno a continuación.")
+        manage_clients_cli()
+        clientes = get_clients_from_config()
+        if not clientes:
+            print("Sin clientes no se puede continuar. Saliendo...")
+            return
 
     current_client = select_client(clientes)
     service = connect_to_splunk(current_client)
-    #current_client = select_client_token(clientes_token)
-    #service = connect_to_splunk_token(current_client)
 
     if not service:
         print("No se pudo conectar a Splunk. Saliendo...")
         return
 
     while True:
-        print("\nSeleccione una opción:")
+        print(f"\n[Cliente: {current_client['name']}] Seleccione una opción:")
         print("1) Backup Alerts")
         print("2) Restore Alerts")
         print("3) Backup Macros")
@@ -64,6 +70,7 @@ def main():
         print("15) Backup Roles")
         print("16) Restore Roles")
         print("17) Gestionar Clientes (Añadir/Modificar)")
+        print("18) Multi Alert Restore Same Client")
         print("0) Exit")
 
         choice = input("Ingrese una opción: ")
@@ -94,12 +101,6 @@ def main():
                 print("Opción no válida, intente nuevamente.")
         elif choice == "2":
             restore_alerts(service)
-        #elif choice == "2":
-        #    app = input("La alerta es para: 1) General 2) Enterprise Security (ES): ")
-        #    if app == "1":
-        #        restore_alerts(service)
-        #    elif app == "2":
-        #        restore_alerts_es(service)
         elif choice == "3":
             backup_macros(service)
         elif choice == "4":
@@ -109,8 +110,12 @@ def main():
         elif choice == "6":
             restore_users(service)
         elif choice == "7":
-            current_client = select_client(clientes)
-            service = connect_to_splunk(current_client)
+            new_client = select_client(clientes)
+            new_service = connect_to_splunk(new_client)
+            if new_service:
+                current_client, service = new_client, new_service
+            else:
+                print(f"No se pudo conectar. Se mantiene la conexión con {current_client['name']}.")
         elif choice == "8":
             dash_name = input("Ingrese el nombre del dashboard a respaldar: ")
             backup_dashboard(service, dash_name)
@@ -119,29 +124,27 @@ def main():
         elif choice == "10":
             list_active_cases(service)
         elif choice == "11":
-            backup_reports(service)        
+            backup_reports(service)
         elif choice == "12":
             targets = get_multiple_clients_selection(clientes)
             if targets:
                 batch_backup_alerts(targets)
-
         elif choice == "13":
             targets = get_multiple_clients_selection(clientes)
             if targets:
                 batch_restore_alerts(targets)
-
         elif choice == "14":
-            batch_restore_multiple_alerts_same_client(service)
-        
+            multi_alert_backup_same_client(service)
         elif choice == "15":
             backup_roles(service)
         elif choice == "16":
             restore_roles(service)
         elif choice == "17":
-            manage_clients_main()
-            print("\nVolviendo al menú principal.")
-            input("NOTA: Si ha realizado cambios, debe reiniciar la aplicación para que se reflejen en la lista de clientes. Presione Enter para continuar...")
-
+            manage_clients_cli()
+            clientes = get_clients_from_config() or clientes
+            print("\nVolviendo al menú principal. Lista de clientes recargada.")
+        elif choice == "18":
+            batch_restore_multiple_alerts_same_client(service)
         elif choice == "0":
             print("Saliendo...")
             break

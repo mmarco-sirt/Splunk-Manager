@@ -1,89 +1,77 @@
 import json
-import os
 
-BACKUP_DIR = "backups/users"
+from core.backup_files import choose_backup_file
 
-def list_backup_files():
-    """Lista los archivos de backup disponibles en la carpeta 'backups/users/'."""
-    if not os.path.exists(BACKUP_DIR):
-        os.makedirs(BACKUP_DIR)
-        return []
-    
-    files = [f for f in os.listdir(BACKUP_DIR) if f.startswith(f"users_") and f.endswith(".json")]
-    return files
+BACKUP_FOLDER = "users"
 
-def choose_backup_file():
-    """Permite al usuario elegir un archivo de backup de usuarios para restaurar."""
-    files = list_backup_files()
-    
-    if not files:
-        print("No hay archivos de backup de usuarios disponibles.")
-        return None
+def restore_users(service, file_path=None):
+    """
+    Restaura usuarios desde un archivo JSON (si no se indica, se pide por consola).
 
-    print("Seleccione un archivo de backup de usuarios para restaurar:")
-    for i, file in enumerate(files, start=1):
-        print(f"{i}. {file}")
+    Acepta dos formatos por usuario:
+      - Plantilla manual: username, password, roles, email, realname, [force-change-pass]
+      - Salida de backup_users: username (o 'name' en backups antiguos), roles, email, realname (sin password)
 
-    while True:
-        try:
-            choice = int(input("Ingrese el número del archivo: ")) - 1
-            if 0 <= choice < len(files):
-                return f"{BACKUP_DIR}/{files[choice]}"
-            print("Número fuera de rango, intente nuevamente.")
-        except ValueError:
-            print("Entrada no válida, ingrese un número.")
-
-def restore_users(service):
-    """Restaura usuarios desde un archivo JSON seleccionado por el usuario."""
-    file_path = choose_backup_file()
+    Los usuarios existentes se actualizan (la contraseña solo si viene en el archivo).
+    Para crear usuarios nuevos sin contraseña en el archivo se pide una contraseña inicial
+    y se fuerza su cambio en el primer login.
+    """
+    file_path = file_path or choose_backup_file(BACKUP_FOLDER, "users_", "backup de usuarios")
     if not file_path:
         return
-    
+
     try:
-        with open(file_path, "r") as file:
+        with open(file_path, "r", encoding="utf-8") as file:
             users = json.load(file)
+    except Exception as e:
+        print(f"Error al leer el archivo de usuarios: {e}")
+        return
 
-        for user in users:
-            roles = user["roles"]
-            email = user["email"]
-            realname = user["realname"]
-            username = user["username"]
-            password = user["password"]
-            #forcechangepass  = user["force-change-pass"]
+    existing_names = {u.name.lower() for u in service.users}
+    initial_password = None  # Se pide solo una vez, si hace falta
+    failed_users = []
 
-            print(f"Restaurando usuario: {username}")
+    for user in users:
+        username = user.get("username") or user.get("name")
+        if not username:
+            print(f"[ADVERTENCIA] Usuario sin 'username' en el archivo (email: {user.get('email', '-')}). Se omite.")
+            failed_users.append(user.get("email") or "SIN_NOMBRE")
+            continue
 
-            if username in [u.name for u in service.users]:
-                existing_user = service.users[username]
-                existing_user.update(roles=roles, email=email, realname=realname, username=username, password=password) 
+        params = {k: user[k] for k in ("roles", "email", "realname") if user.get(k)}
+        if "force-change-pass" in user:
+            params["force-change-pass"] = user["force-change-pass"]
+        password = user.get("password")
+
+        print(f"Restaurando usuario: {username}")
+
+        try:
+            if username.lower() in existing_names:
+                if password:
+                    params["password"] = password
+                service.users[username.lower()].update(**params)
                 print(f"Usuario '{username}' actualizado correctamente.")
             else:
-                service.users.create(roles=roles, email=email, realname=realname, username=username, password=password) 
+                if not password:
+                    if initial_password is None:
+                        initial_password = input("Hay usuarios nuevos sin contraseña en el archivo. "
+                                                 "Contraseña inicial (vacío para no crearlos): ")
+                    if not initial_password:
+                        print(f"Usuario '{username}' no creado: no tiene contraseña.")
+                        failed_users.append(username)
+                        continue
+                    password = initial_password
+                    params.setdefault("force-change-pass", True)
+
+                roles = params.pop("roles", "user")
+                service.users.create(username, password, roles, **params)
+                existing_names.add(username.lower())
                 print(f"Usuario '{username}' creado correctamente.")
-    
-    except Exception as e:
-        print(f"Error al restaurar usuarios: {e}")
+        except Exception as e:
+            print(f"Error al restaurar el usuario '{username}': {e}")
+            failed_users.append(username)
 
-def restore_users2(service):
-    """Restaura usuarios desde un archivo JSON seleccionado por el usuario."""
-    file_path = choose_backup_file()
-    if not file_path:
-        return
-    
-    try:
-        with open(file_path, "r") as file:
-            users = json.load(file)
-
-        for user in users:
-            print(f"Restaurando usuario: {user['username']}")
-
-            if user["username"] in [u.name for u in service.users]:
-                existing_user = service.users[user["username"]]
-                existing_user.update(**user)  # Pasamos todos los valores del diccionario directamente
-                print(f"Usuario '{user['username']}' actualizado correctamente.")
-            else:
-                service.users.create(**user)  # Pasamos el diccionario completo
-                print(f"Usuario '{user['username']}' creado correctamente.")
-    
-    except Exception as e:
-        print(f"Error al restaurar usuarios: {e}")
+    if failed_users:
+        print("\n[ERROR] Los siguientes usuarios no se pudieron restaurar:")
+        for name in failed_users:
+            print(f" - {name}")

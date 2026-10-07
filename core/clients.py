@@ -1,17 +1,17 @@
-import os
-import sys
 import ast
+import os
 import pprint
 
-if getattr(sys, 'frozen', False):
-    # Si se ejecuta como .exe, buscar en la carpeta del ejecutable
-    project_root = os.path.dirname(sys.executable)
-else:
-    # Añadir el directorio raíz del proyecto al path para poder encontrar 'config.py'
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    sys.path.insert(0, project_root)
+from core.paths import CONFIG_PATH
 
-CONFIG_PATH = os.path.join(project_root, 'config.py')
+
+def ensure_config_exists():
+    """Crea un config.py vacío si no existe. Devuelve True si lo ha creado."""
+    if os.path.exists(CONFIG_PATH):
+        return False
+    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+        f.write("clientes = []\n")
+    return True
 
 def get_clients_from_config():
     """Extrae la lista de 'clientes' desde config.py usando AST para más seguridad."""
@@ -28,11 +28,12 @@ def get_clients_from_config():
                 return ast.literal_eval(node.value)
             except ValueError:
                 print("❌ Error: No se pudo evaluar la lista 'clientes' en config.py.")
-                return None
+                return []
     return [] # Devuelve lista vacía si la variable no se encuentra
 
 def save_clients_to_config(clients_list):
     """Guarda la lista de clientes actualizada en config.py, preservando el resto."""
+    ensure_config_exists()
     with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
         source_code = f.read()
     
@@ -141,12 +142,10 @@ def add_client():
     clients.append(new_client)
     save_clients_to_config(clients)
 
-def main():
-    """Menú principal para el script de gestión de clientes."""
-    if not os.path.exists(CONFIG_PATH):
-        print(f"Aviso: No se encuentra el archivo `config.py`. Se creará uno si añade un cliente.")
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            f.write("clientes = []\n")
+def manage_clients_cli():
+    """Menú de consola para añadir/modificar clientes."""
+    if ensure_config_exists():
+        print("Aviso: No se encontraba `config.py`. Se ha creado uno vacío.")
 
     while True:
         print("\n--- Gestión de Clientes de Splunk ---")
@@ -165,4 +164,4 @@ def main():
             print("Opción no válida. Intente de nuevo.")
 
 if __name__ == "__main__":
-    main()
+    manage_clients_cli()

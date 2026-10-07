@@ -1,13 +1,12 @@
 import json
 import os
 
-BACKUP_DIR = "backups/reportes"
+from core.paths import backup_dir, host_tag
+
+BACKUP_FOLDER = "reportes"
 
 def backup_reports(service):
     """Realiza un backup de los reportes (saved searches sin alert_type) en un archivo JSON."""
-    if not os.path.exists(BACKUP_DIR):
-        os.makedirs(BACKUP_DIR)
-
     report_backup = []
 
     for saved_search in service.saved_searches:
@@ -18,7 +17,7 @@ def backup_reports(service):
                 "content": saved_search.content
             })
 
-    file_name = f"{BACKUP_DIR}/reportes_{service.host.split('.')[0]}_backup.json"
+    file_name = os.path.join(backup_dir(BACKUP_FOLDER), f"reportes_{host_tag(service)}_backup.json")
     with open(file_name, "w", encoding="utf-8") as file:
         json.dump(report_backup, file, indent=4)
 

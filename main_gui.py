@@ -2,28 +2,19 @@ import tkinter as tk
 from tkinter import messagebox, ttk, simpledialog
 import os
 import threading
-import inspect
-import importlib
 import sys
 import queue
 import builtins
 
-if getattr(sys, 'frozen', False):
-    # Entorno .exe: asegurar que config.py se lea desde la carpeta del ejecutable
-    exe_dir = os.path.dirname(sys.executable)
-    sys.path.insert(0, exe_dir)
-    config_file = os.path.join(exe_dir, 'config.py')
-    if not os.path.exists(config_file):
-        with open(config_file, 'w', encoding='utf-8') as f:
-            f.write("clientes = []\n")
-
-from config import clientes
-from utils import connect_to_splunk, ensure_backup_dir
+from core.backup_files import list_backup_files
+from core.clients import ensure_config_exists, get_clients_from_config, save_clients_to_config
+from core.connection import connect_to_splunk
+from core.paths import backup_dir
 from options.alerts.backup_alerts import (
     backup_alerts, backup_alerts_especific, backup_alerts_custom, 
     backup_es_use_cases, backup_es_use_cases_custom
 )
-from options.alerts.restore_alerts import restore_alerts, restore_alerts_from_file
+from options.alerts.restore_alerts import restore_alerts_from_file
 from options.alerts.list_alerts import list_active_cases
 from options.macros.backup_macros import backup_macros
 from options.macros.restore_macros import restore_macros
@@ -34,8 +25,7 @@ from options.dashboards.restore_dashboard import restore_dashboard
 from options.reports.backup_reports import backup_reports
 from options.roles.backup_roles import backup_roles
 from options.roles.restore_roles import restore_roles
-from batch_mode import batch_backup_alerts, batch_restore_alerts
-from options.clientes.manage_clients import get_clients_from_config, save_clients_to_config
+from options.batch.batch_mode import batch_backup_alerts, batch_restore_alerts, multi_alert_backup_same_client
 
 TECNOLOGIAS = ["AD", "FW", "AV", "PX", "MAIL", "O365", "MI"]
 
@@ -69,6 +59,8 @@ class SplunkApp(tk.Tk):
         self.minsize(700, 500)
         self.service = None
         self.current_client = None
+        ensure_config_exists()
+        self.clients = get_clients_from_config()
 
         self.input_queue = queue.Queue()
         self.override_input()
@@ -77,7 +69,7 @@ class SplunkApp(tk.Tk):
         if "clam" in style.theme_names():
             style.theme_use("clam")
 
-        ensure_backup_dir()
+        backup_dir()
         self.create_widgets()
         
         print("Bienvenido a Splunk Manager GUI.")
@@ -106,9 +98,9 @@ class SplunkApp(tk.Tk):
         
         self.client_var = tk.StringVar()
         self.client_combo = ttk.Combobox(header_frame, textvariable=self.client_var, state="readonly", width=25)
-        self.client_combo['values'] = [c["name"] for c in clientes]
+        self.client_combo['values'] = [c["name"] for c in self.clients]
         self.client_combo.pack(side="left", padx=5)
-        if clientes:
+        if self.clients:
             self.client_combo.current(0)
 
         self.btn_connect = ttk.Button(header_frame, text="Conectar", command=self.connect_client)
@@ -150,6 +142,7 @@ class SplunkApp(tk.Tk):
             ("Backup Específico (Tecnología)", lambda: self.run_action(self.backup_alerts_specific_cli)),
             ("Backup Custom Alerts", lambda: self.run_action(self.backup_alerts_custom_cli)),
             ("Backup Enterprise Security", lambda: self.run_action(backup_es_use_cases)),
+            ("Backup Enterprise Security Custom", lambda: self.run_action(self.backup_es_custom_cli)),
             ("Restore Alerts", self.restore_alerts_gui),
             ("List Active Alerts", lambda: self.run_action(list_active_cases))
         ]
@@ -171,7 +164,7 @@ class SplunkApp(tk.Tk):
             ("Backup Users", lambda: self.run_action(backup_users)),
             ("Restore Users", self.restore_users_gui),
             ("Backup Roles", lambda: self.run_action(backup_roles)),
-            ("Restore Roles", lambda: self.run_action(restore_roles))
+            ("Restore Roles", self.restore_roles_gui)
         ]
         self.add_tab_buttons(tab, buttons)
 
@@ -240,27 +233,29 @@ class SplunkApp(tk.Tk):
             print("⚠️ Seleccione un cliente de la lista.")
             return
             
-        client_dict = next((c for c in clientes if c["name"] == selection), None)
+        client_dict = next((c for c in self.clients if c["name"] == selection), None)
         if not client_dict:
             return
-            
+
         self.current_client = client_dict
-        
-        def connect_task():
-            self.btn_connect.config(state="disabled", text="Conectando...")
-            print(f"\n⏳ Conectando a {client_dict['name']}...")
-            
-            self.service = connect_to_splunk(self.current_client)
-            
-            if self.service:
+        self.btn_connect.config(state="disabled", text="Conectando...")
+
+        def on_connected(service):
+            # Se ejecuta en el hilo principal: Tkinter no es thread-safe
+            self.service = service
+            if service:
                 self.client_label.config(text=f"🟢 {client_dict['name']}", foreground="green")
                 print(f"✅ Conexión establecida correctamente.")
             else:
                 self.client_label.config(text="🔴 Error de conexión", foreground="red")
                 print(f"❌ Error al conectar a {client_dict['name']}.")
-                
             self.btn_connect.config(state="normal", text="Conectar")
-            
+
+        def connect_task():
+            print(f"\n⏳ Conectando a {client_dict['name']}...")
+            service = connect_to_splunk(client_dict)
+            self.after(0, on_connected, service)
+
         threading.Thread(target=connect_task, daemon=True).start()
 
     def clear_console(self):
@@ -301,6 +296,13 @@ class SplunkApp(tk.Tk):
         else:
             print("❌ Nombre vacío. Operación cancelada.")
 
+    def backup_es_custom_cli(self, service):
+        name = input("\nEscriba el texto a buscar en el nombre del caso de uso ES: ")
+        if name:
+            backup_es_use_cases_custom(service, name)
+        else:
+            print("❌ Nombre vacío. Operación cancelada.")
+
     def backup_dashboard_cli(self, service):
         dash_name = input("\nIngrese el nombre del Dashboard a respaldar: ")
         if dash_name:
@@ -308,30 +310,13 @@ class SplunkApp(tk.Tk):
         else:
             print("❌ Nombre vacío. Operación cancelada.")
             
-    def call_with_file_fallback(self, func, module_name, file_path):
-        """Ejecuta una funcion de restauracion. Si la funcion no acepta un parametro de archivo, 
-        mockea temporalmente `choose_backup_file` del modulo original para compatibilidad."""
-        sig = inspect.signature(func)
-        if len(sig.parameters) >= 2:
-            func(self.service, file_path)
-        else:
-            try:
-                module = importlib.import_module(module_name)
-                original_choose = getattr(module, "choose_backup_file", None)
-                if original_choose:
-                    setattr(module, "choose_backup_file", lambda: file_path)
-                func(self.service)
-            finally:
-                if original_choose:
-                    setattr(module, "choose_backup_file", original_choose)
-
-    def select_backup_file(self, folder, callback, extension=".json"):
-        dir_path = os.path.join("backups", folder)
-        if not os.path.exists(dir_path):
-            print(f"⚠️ Error: No hay carpeta de backups para '{folder}'")
+    def select_backup_file(self, folder, callback, prefix=""):
+        if not self.service:
+            print("⚠️ Sin conexión: Debe conectarse a un cliente primero.")
             return
 
-        files = [f for f in os.listdir(dir_path) if f.endswith(extension)]
+        dir_path = backup_dir(folder)
+        files = list_backup_files(folder, prefix)
         if not files:
             print(f"ℹ️ Sin archivos: No hay backups disponibles en '{folder}'")
             return
@@ -385,29 +370,28 @@ class SplunkApp(tk.Tk):
         ttk.Button(win, text="Restaurar Archivo Seleccionado", command=on_select).pack(pady=10, ipadx=10, ipady=5)
 
     def restore_alerts_gui(self):
-        self.select_backup_file("alertas", lambda f: restore_alerts_from_file(self.service, f))
+        self.select_backup_file("alertas", lambda f: restore_alerts_from_file(self.service, f), prefix="alertas_")
 
     def restore_macros_gui(self):
-        self.select_backup_file("macros", lambda f: self.call_with_file_fallback(restore_macros, "options.macros.restore_macros", f))
+        self.select_backup_file("macros", lambda f: restore_macros(self.service, f), prefix="macros_")
 
     def restore_users_gui(self):
-        self.select_backup_file("users", lambda f: self.call_with_file_fallback(restore_users, "options.users.restore_users", f))
+        self.select_backup_file("users", lambda f: restore_users(self.service, f), prefix="users_")
+
+    def restore_roles_gui(self):
+        self.select_backup_file("roles", lambda f: restore_roles(self.service, f), prefix="roles_")
 
     def restore_dashboard_gui(self):
-        self.select_backup_file("dashboards", lambda f: self.call_with_file_fallback(restore_dashboard, "options.dashboards.restore_dashboard", f))
+        self.select_backup_file("dashboards", lambda f: restore_dashboard(self.service, f))
 
     # --- MÉTODOS DE BATCH Y CREDENCIALES ---
 
     def refresh_client_list(self):
-        """Recarga la lista de clientes en el combobox principal y en la variable global."""
-        global clientes
-        
-        reloaded_clients = get_clients_from_config()
-        clientes.clear()
-        clientes.extend(reloaded_clients)
-        
-        self.client_combo['values'] = [c.get("name", "SIN NOMBRE") for c in clientes]
-        if clientes:
+        """Recarga la lista de clientes desde config.py y actualiza el combobox principal."""
+        self.clients = get_clients_from_config()
+
+        self.client_combo['values'] = [c.get("name", "SIN NOMBRE") for c in self.clients]
+        if self.clients:
             self.client_combo.current(0)
         else:
             self.client_combo.set('')
@@ -548,12 +532,12 @@ class SplunkApp(tk.Tk):
         scrollbar.pack(side="right", fill="y")
         listbox.pack(side="left", fill="both", expand=True)
 
-        for c in clientes:
+        for c in self.clients:
             listbox.insert(tk.END, c["name"])
-            
+
         def on_accept():
             selected_indices = listbox.curselection()
-            selected_clients = [clientes[i] for i in selected_indices]
+            selected_clients = [self.clients[i] for i in selected_indices]
             if not selected_clients:
                 messagebox.showwarning("Selección vacía", "Debe seleccionar al menos un cliente.")
                 return
@@ -581,19 +565,9 @@ class SplunkApp(tk.Tk):
             return
         
         def task():
-            print("\n▶ Iniciando Multi Alert Backup...")
             alertas_str = input("Ingrese los nombres de las alertas separados por coma:\n> ")
-            if alertas_str:
-                alertas = [a.strip() for a in alertas_str.split(",") if a.strip()]
-                for a in alertas:
-                    print(f"\n➡ Backup de {a}...")
-                    try:
-                        backup_alerts_custom(self.service, a)
-                    except Exception as e:
-                        print(f"❌ Error en backup de {a}: {e}")
-                print("✅ Multi Alert Backup completado.")
-            else:
-                print("❌ Operación cancelada.")
+            multi_alert_backup_same_client(self.service, alertas_str.split(","))
+            print("✅ Multi Alert Backup finalizado.")
         threading.Thread(target=task, daemon=True).start()
 
     def multi_alert_restore_gui(self):
@@ -601,20 +575,11 @@ class SplunkApp(tk.Tk):
             print("⚠️ Sin conexión: Debe conectarse a un cliente primero.")
             return
         
-        def callback_multiple(service, file_path):
-            restore_alerts_from_file(service, file_path)
-            
-        # Reutilizamos el selector de archivos pero modificado para aceptar múltiples internamente
-        # Para no repetir todo el código de UI, usaremos un truco similar pasándole la lógica a la consola
-        self.select_multiple_backup_files("alertas", callback_multiple)
+        self.select_multiple_backup_files("alertas", restore_alerts_from_file, prefix="alertas_")
 
-    def select_multiple_backup_files(self, folder, callback, extension=".json"):
-        dir_path = os.path.join("backups", folder)
-        if not os.path.exists(dir_path):
-            print(f"⚠️ Error: No hay carpeta de backups para '{folder}'")
-            return
-
-        files = [f for f in os.listdir(dir_path) if f.endswith(extension)]
+    def select_multiple_backup_files(self, folder, callback, prefix=""):
+        dir_path = backup_dir(folder)
+        files = list_backup_files(folder, prefix)
         if not files:
             print(f"ℹ️ Sin archivos: No hay backups disponibles en '{folder}'")
             return

@@ -12,3 +12,7 @@ __pycache__/
 
 # Backups locales (contienen datos del cliente)
 backups/
+
+# Artefactos de PyInstaller
+build/
+dist/
