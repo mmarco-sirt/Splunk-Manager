@@ -1,7 +1,12 @@
-# Copia este archivo como config.py (junto a main_cli.py / main_gui.py o junto al .exe) y rellena tus datos.
-# Cada cliente usa usuario/contraseña o, si no los tiene, token.
+# Copia este archivo como config.py (junto a main_cli.py / main_gui.py o junto al .exe) y rellena tus datos,
+# o mejor añade los clientes desde la aplicación.
+# Cada cliente puede usar usuario/contraseña, token o ambos. Con los dos, "auth" indica cuál probar primero
+# ("password" o "token"); si Splunk rechaza ese, se prueba el otro.
+# Las contraseñas y tokens escritos aquí en claro se cifran automáticamente (DPAPI de Windows) al arrancar la aplicación.
 
 clientes = [
     {"name": "CLIENTE_EJEMPLO", "host": "ejemplo.splunkcloud.com", "username": "admin", "password": "tu_password"},
     {"name": "CLIENTE_TOKEN_EJEMPLO", "host": "ejemplo2.splunkcloud.com", "splunkToken": "tu_token_aqui"},
+    {"name": "CLIENTE_AMBOS_EJEMPLO", "host": "ejemplo3.splunkcloud.com", "username": "admin", "password": "tu_password",
+     "splunkToken": "tu_token_aqui", "auth": "token"},
 ]

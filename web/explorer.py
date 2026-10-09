@@ -47,30 +47,37 @@ def oneshot_results(service, spl, **params):
 
 # --- Saved searches (alertas y reportes) ---
 
+def saved_search_row(s):
+    """Resumen de una saved search para los listados de la web."""
+    c = s.content
+    return {
+        "name": s.name,
+        **_acl(s),
+        "disabled": _flag(c.get("disabled")),
+        "scheduled": _flag(c.get("is_scheduled")),
+        "cron": c.get("cron_schedule") or "",
+        "next_run": c.get("next_scheduled_time") or "",
+        "alert_type": c.get("alert_type") or "",
+        "is_alert": _is_alert(s),
+        "is_es": _is_es_use_case(s),
+        "is_cu": s.name.startswith("CU-"),
+        "es_label": c.get("action.correlationsearch.label") or "",
+        "severity": c.get("alert.severity") or "",
+        "actions": c.get("actions") or "",
+        "search": c.get("search") or "",
+        "description": c.get("description") or "",
+        "earliest": c.get("dispatch.earliest_time") or "",
+        "latest": c.get("dispatch.latest_time") or "",
+    }
+
+
 def list_saved_searches(service):
-    rows = []
-    for s in service.saved_searches:
-        c = s.content
-        rows.append({
-            "name": s.name,
-            **_acl(s),
-            "disabled": _flag(c.get("disabled")),
-            "scheduled": _flag(c.get("is_scheduled")),
-            "cron": c.get("cron_schedule") or "",
-            "next_run": c.get("next_scheduled_time") or "",
-            "alert_type": c.get("alert_type") or "",
-            "is_alert": _is_alert(s),
-            "is_es": _is_es_use_case(s),
-            "is_cu": s.name.startswith("CU-"),
-            "es_label": c.get("action.correlationsearch.label") or "",
-            "severity": c.get("alert.severity") or "",
-            "actions": c.get("actions") or "",
-            "search": c.get("search") or "",
-            "description": c.get("description") or "",
-            "earliest": c.get("dispatch.earliest_time") or "",
-            "latest": c.get("dispatch.latest_time") or "",
-        })
-    return rows
+    return [saved_search_row(s) for s in service.saved_searches]
+
+
+def saved_search(service, name, app, owner):
+    """Saved search por nombre (en su app/propietario si se indican). KeyError si no existe."""
+    return _saved_search(service, name, app, owner)
 
 
 def _saved_search(service, name, app, owner):

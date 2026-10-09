@@ -15,7 +15,7 @@ import traceback
 import uuid
 from contextlib import contextmanager
 
-from core.paths import BACKUP_ROOT
+from core.paths import BACKUP_ROOT, REPORTS_ROOT
 
 MAX_JOBS = 200
 ERROR_PATTERN = re.compile(r"❌|\[ERROR\]|\bError\b|\bERROR\b|No se pudo")
@@ -88,9 +88,20 @@ def capture_output():
         _local.sink = previous
 
 
-def _snapshot_backups():
-    """Devuelve {carpeta/archivo: mtime} de los .json de backups/<carpeta>/ (sin el historial)."""
+def _snapshot_files():
+    """
+    Devuelve {carpeta/archivo: mtime} de los .json de backups/<carpeta>/ (sin el historial) y de los informes
+    generados ('informes/<archivo>').
+    """
     snapshot = {}
+    if os.path.isdir(REPORTS_ROOT):
+        for name in os.listdir(REPORTS_ROOT):
+            path = os.path.join(REPORTS_ROOT, name)
+            if os.path.isfile(path):
+                try:
+                    snapshot[f"informes/{name}"] = os.path.getmtime(path)
+                except OSError:
+                    pass
     if not os.path.isdir(BACKUP_ROOT):
         return snapshot
     for folder in os.listdir(BACKUP_ROOT):
@@ -185,7 +196,7 @@ class JobManager:
 
         def runner():
             _local.sink = job.write
-            before = _snapshot_backups()
+            before = _snapshot_files()
             status = "success"
             try:
                 target()
@@ -194,7 +205,7 @@ class JobManager:
                 print(traceback.format_exc())
                 status = "error"
             finally:
-                after = _snapshot_backups()
+                after = _snapshot_files()
                 job.files = sorted(p for p, mtime in after.items() if before.get(p) != mtime)
                 _local.sink = None
                 job.finish(status)

@@ -1,6 +1,7 @@
 // Salud de todos los clientes: conexión, alertas, planificador, ingesta y fuentes que han dejado de enviar datos.
 import { get, post } from '../api.js';
 import { state, selectClient, navigate } from '../core.js';
+import { openReportModal } from './reports.js';
 import {
   h, append, clear, icon, button, badge, pageHeader, DataTable, openDrawer, kv, section, errorBox, infoBox, emptyState,
   statusLabel, fmtNum, fmtBytes, fmtRelative, fmtDate, withBusy,
@@ -73,7 +74,7 @@ export function evaluate(result, thresholdHours, ignored) {
   }
 
   const alerts = checks.alerts?.ok ? checks.alerts.data : null;
-  if (alerts?.cu_disabled) add('info', `${alerts.cu_disabled} casos de uso CU- deshabilitados`);
+  if (alerts?.cu_disabled) add('info', alerts.cu_disabled === 1 ? '1 caso de uso CU- deshabilitado' : `${alerts.cu_disabled} casos de uso CU- deshabilitados`);
 
   const level = problems.reduce((current, p) => (RANK[p.level] > RANK[current] ? p.level : current), 'ok');
   problems.sort((a, b) => RANK[b.level] - RANK[a.level]);
@@ -367,7 +368,9 @@ export default {
       pageHeader({
         title: 'Salud de clientes',
         subtitle: 'Estado de todos los clientes de un vistazo: conexión, alertas, planificador e ingesta de las últimas 24 h, y fuentes que han dejado de enviar datos.',
-        actions: [stamp, thresholdSelect, runAll],
+        actions: [stamp, thresholdSelect,
+          button('Exportar informe…', { iconName: 'fileText', onClick: () => openReportModal({ clients: state.clients.map((c) => c.name), sections: ['health'] }) }),
+          runAll],
       }),
       errorSlot,
       state.clients.length > 6 ? infoBox(`«Analizar todos» se conecta a los ${state.clients.length} clientes y lanza 3 búsquedas cortas en cada uno (de 6 en 6). Tarda alrededor de un minuto.`) : null,

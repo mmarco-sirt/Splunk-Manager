@@ -1,4 +1,4 @@
-// Alertas y reportes (saved searches): listado en vivo, detalle, habilitar/deshabilitar, ejecutar, backup y restore.
+// Alertas y reportes (saved searches): listado en vivo, detalle, edición, habilitar/deshabilitar, ejecutar, backup y restore.
 import { post } from '../api.js';
 import { state, loadResource, cachedAt, navigate } from '../core.js';
 import {
@@ -6,6 +6,7 @@ import {
   codeBlock, errorBox, loadingRows, fmtRelative, withBusy, fmtNum,
 } from '../ui.js';
 import { openBackupModal, openRestoreModal, runBackup } from '../ops.js';
+import { openEditor, openBulkEditor } from '../alert-editor.js';
 
 const SEVERITY = { 1: ['Debug', ''], 2: ['Info', ''], 3: ['Baja', 'accent'], 4: ['Media', 'warn'], 5: ['Alta', 'bad'], 6: ['Crítica', 'bad'] };
 
@@ -78,10 +79,14 @@ function openDetail(row, refreshTable, { isAlertView }) {
     await setEnabled([row], row.disabled, refreshTable);
     drawer.close();
   }));
-  const runBtn = button('Ejecutar ahora', { iconName: 'play', size: 'sm', variant: 'primary' });
+  const runBtn = button('Ejecutar ahora', { iconName: 'play', size: 'sm' });
   runBtn.addEventListener('click', () => withBusy(runBtn, () => dispatchNow(row).catch((e) => toast(e.message, 'error'))));
 
+  const editBtn = button('Editar', { iconName: 'edit', size: 'sm', variant: 'primary' });
+  editBtn.addEventListener('click', () => editRow(row, refreshTable, { isAlertView, reopen: true }));
+
   const actions = [
+    editBtn,
     runBtn,
     button('Abrir en Búsqueda', { iconName: 'search', size: 'sm', onClick: () => { drawer.close(); navigate('search', { q: row.search }); } }),
     toggleBtn,
@@ -116,6 +121,28 @@ function openDetail(row, refreshTable, { isAlertView }) {
   });
 }
 
+function editRow(row, refreshTable, { isAlertView, reopen = false } = {}) {
+  openEditor(row, {
+    onSaved: (updated) => {
+      Object.assign(row, updated);
+      refreshTable();
+      if (reopen) openDetail(row, refreshTable, { isAlertView });
+    },
+  });
+}
+
+function bulkEdit(rows, allRows, refreshTable) {
+  openBulkEditor(rows, {
+    onSaved: (updated) => {
+      for (const u of updated) {
+        const row = allRows().find((r) => r.name === u.name && r.app === u.app && r.owner === u.owner);
+        if (row) Object.assign(row, u);
+      }
+      refreshTable();
+    },
+  });
+}
+
 function makeView({ id, title, iconName, subtitle, rowFilter, filters, isAlertView }) {
   return {
     id, title, icon: iconName, needsClient: true,
@@ -146,6 +173,7 @@ function makeView({ id, title, iconName, subtitle, rowFilter, filters, isAlertVi
               emptyTitle: `No hay ${title.toLowerCase()}`,
               onRowClick: (r) => openDetail(r, refreshTable, { isAlertView }),
               selectionActions: [
+                { label: 'Modificar…', icon: 'sliders', variant: 'primary', onClick: (sel) => bulkEdit(sel, () => rows, refreshTable) },
                 isAlertView && { label: 'Backup de la selección', icon: 'download', onClick: (sel) => backupSelection(sel) },
                 { label: 'Habilitar', icon: 'power', onClick: (sel) => setEnabled(sel, true, refreshTable) },
                 {
@@ -178,7 +206,9 @@ function makeView({ id, title, iconName, subtitle, rowFilter, filters, isAlertVi
                     run.addEventListener('click', () => withBusy(run, () => dispatchNow(r).catch((e) => toast(e.message, 'error'))));
                     const toggle = button('', { size: 'sm', variant: 'ghost', iconName: 'power', title: r.disabled ? 'Habilitar' : 'Deshabilitar' });
                     toggle.addEventListener('click', () => withBusy(toggle, () => setEnabled([r], r.disabled, refreshTable)));
-                    return h('div', { class: 'row-actions' }, run, toggle,
+                    const edit = button('', { size: 'sm', variant: 'ghost', iconName: 'edit', title: 'Editar' });
+                    edit.addEventListener('click', () => editRow(r, refreshTable, { isAlertView }));
+                    return h('div', { class: 'row-actions' }, edit, run, toggle,
                       button('', { size: 'sm', variant: 'ghost', iconName: 'eye', title: 'Ver detalle', onClick: () => openDetail(r, refreshTable, { isAlertView }) }));
                   },
                 },
@@ -231,7 +261,7 @@ export const alertsView = makeView({
   title: 'Alertas',
   iconName: 'bell',
   isAlertView: true,
-  subtitle: () => `Alertas y casos de uso de Enterprise Security de ${state.client}. Pulse una fila para ver su SPL y configuración.`,
+  subtitle: () => `Alertas y casos de uso de Enterprise Security de ${state.client}. Pulse una fila para ver su SPL y configuración, o edítela con el lápiz.`,
   rowFilter: (r) => r.is_alert || r.is_es,
   filters: [
     {

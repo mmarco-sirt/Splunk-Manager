@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ report.title }} · {{ report.generated.strftime('%d/%m/%Y %H:%M') }}</title>
+<style>
+  :root {
+    --text: #17171a; --text-2: #52514e; --text-3: #85847e; --border: #e4e3dd; --surface-2: #f6f6f3;
+    --accent: #2a78d6; --good: #006300; --good-soft: #e5f4e5; --warn: #7f5300; --warn-soft: #fdf3da;
+    --serious: #a4461d; --serious-soft: #fcebe3; --bad: #ad2727; --bad-soft: #fbe8e8;
+  }
+  @page { size: A4; margin: 14mm 12mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { margin: 0; background: #fff; color: var(--text); font: 10pt/1.45 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; }
+  .page { max-width: 1040px; margin: 0 auto; padding: 28px 28px 40px; }
+  h1 { font-size: 22pt; margin: 4px 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 15pt; margin: 0 0 4px; }
+  h3 { font-size: 11pt; margin: 22px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+  p { margin: 0 0 8px; }
+  .muted { color: var(--text-3); }
+  .eyebrow { color: var(--accent); font-weight: 650; font-size: 9pt; letter-spacing: .06em; text-transform: uppercase; }
+  .cover { border-bottom: 2px solid var(--text); padding-bottom: 14px; margin-bottom: 18px; display: flex; gap: 16px; align-items: flex-end; }
+  .cover .meta { color: var(--text-2); }
+  .cover .spacer { flex: 1; }
+  .print-btn { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+  .tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 10px 0 4px; }
+  .tiles.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .tile { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; break-inside: avoid; }
+  .tile .label { color: var(--text-2); font-size: 8.5pt; }
+  .tile .value { font-size: 15pt; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .tile .sub { color: var(--text-3); font-size: 8.5pt; }
+  table { width: 100%; border-collapse: collapse; font-size: 8.8pt; margin: 4px 0 6px; }
+  th { text-align: left; font-weight: 600; color: var(--text-2); background: var(--surface-2); border-bottom: 1px solid var(--border); padding: 5px 6px; }
+  td { border-bottom: 1px solid var(--border); padding: 4px 6px; vertical-align: top; }
+  tr { break-inside: avoid; }
+  thead { display: table-header-group; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .nowrap { white-space: nowrap; }
+  .wrap { word-break: break-word; }
+  code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 8.5pt; }
+  .level { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 8.5pt; font-weight: 600; white-space: nowrap; }
+  .level-ok, .level-info { background: var(--good-soft); color: var(--good); }
+  .level-warning { background: var(--warn-soft); color: var(--warn); }
+  .level-serious { background: var(--serious-soft); color: var(--serious); }
+  .level-critical { background: var(--bad-soft); color: var(--bad); }
+  .level-pending { background: var(--surface-2); color: var(--text-3); }
+  .delta-down { color: var(--serious); } .delta-up { color: var(--warn); }
+  .problems { list-style: none; padding: 0; margin: 4px 0; }
+  .problems li { padding: 3px 0 3px 12px; border-left: 3px solid var(--border); margin-bottom: 3px; }
+  .problems li.critical { border-color: var(--bad); } .problems li.serious { border-color: #ec835a; }
+  .problems li.warning { border-color: #fab219; } .problems li.info { border-color: var(--text-3); }
+  .error { background: var(--bad-soft); color: var(--bad); padding: 8px 10px; border-radius: 8px; margin: 8px 0; }
+  .client { break-before: page; padding-top: 4px; }
+  .client-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; border-bottom: 2px solid var(--text); padding-bottom: 6px; }
+  .client-head .host { color: var(--text-2); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .chart { display: block; margin: 6px 0 2px; }
+  .chart .bar { fill: var(--accent); } .chart .bar.partial { fill: #9fc2ec; }
+  .chart .grid { stroke: var(--border); stroke-width: 1; } .chart .axis { stroke: var(--text-3); stroke-width: 1; }
+  .chart .avg { stroke: var(--text); stroke-width: 1; stroke-dasharray: 4 3; }
+  .chart .tick { fill: var(--text-3); font-size: 9px; }
+  .chart .avg-label { fill: var(--text); font-weight: 600; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
+  .footer { margin-top: 28px; color: var(--text-3); font-size: 8.5pt; border-top: 1px solid var(--border); padding-top: 8px; }
+  @media print {
+    .no-print { display: none !important; }
+    .page { padding: 0; max-width: none; }
+  }
+  @media (max-width: 700px) {
+    .page { padding: 16px; }
+    .tiles, .tiles.four, .two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cover { flex-wrap: wrap; }
+    .table-wrap { overflow-x: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="cover">
+    <div>
+      <div class="eyebrow">Splunk Manager · SIRT</div>
+      <h1>{{ report.title }}</h1>
+      <div class="meta">
+        Generado el {{ report.generated.strftime('%d/%m/%Y a las %H:%M') }} ·
+        {{ clients|length }} {{ 'cliente' if clients|length == 1 else 'clientes' }}
+        {% if 'ingest' in sections %} · ingesta de los últimos {{ report.days }} días{% endif %}
+        {% if 'health' in sections %} · fuente sin datos: más de {{ report.threshold }} h{% endif %}
+      </div>
+    </div>
+    <div class="spacer"></div>
+    {% if not report.pdf %}<button class="print-btn no-print" onclick="window.print()">Imprimir / Guardar como PDF</button>{% endif %}
+  </header>
+
+  {% if 'health' in sections %}
+  <section>
+    <h2>Resumen</h2>
+    <div class="tiles">
+      <div class="tile"><div class="label">Correctos</div><div class="value">{{ (totals.ok + totals.info)|num }}</div><div class="sub">de {{ clients|length }} clientes</div></div>
+      <div class="tile"><div class="label">Con avisos</div><div class="value">{{ totals.warning|num }}</div></div>
+      <div class="tile"><div class="label">Con problemas</div><div class="value">{{ totals.serious|num }}</div></div>
+      <div class="tile"><div class="label">Críticos o sin conexión</div><div class="value">{{ totals.critical|num }}</div></div>
+      <div class="tile"><div class="label">Ingesta total 24 h</div><div class="value">{{ ingest24_total|bytes }}</div></div>
+    </div>
+  </section>
+  {% endif %}
+
+  <section>
+    <h3>Clientes</h3>
+    <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Cliente</th><th>Versión</th>
+        {% if 'health' in sections %}<th>Estado</th><th>Diagnóstico</th><th class="num">Alertas activas</th><th class="num">Planificador 24 h</th><th class="num">Ingesta 24 h</th><th class="num">Sin datos</th>{% endif %}
+        {% if 'ingest' in sections %}<th class="num">Media/día ({{ report.days }} d)</th>{% endif %}
+      </tr></thead>
+      <tbody>
+      {% for c in clients %}{% set s = summaries[c.name] %}
+        <tr>
+          <td><strong>{{ c.name }}</strong><div class="muted">{{ c.host }}</div></td>
+          <td class="nowrap">{{ s.version or '—' }}</td>
+          {% if 'health' in sections %}
+          <td><span class="level level-{{ s.level }}">{{ LEVEL_LABELS[s.level] }}</span></td>
+          <td class="wrap">{{ s.problems[0].text if s.problems else 'Sin incidencias' }}{% if s.problems|length > 1 %} <span class="muted">(+{{ s.problems|length - 1 }})</span>{% endif %}</td>
+          <td class="num">{% if s.alerts %}{{ (s.alerts.total - s.alerts.disabled)|num }} / {{ s.alerts.total|num }}{% else %}—{% endif %}</td>
+          <td class="num">{% if s.scheduler %}{{ s.scheduler.success|num }} ok{% if s.scheduler.errors %} · {{ s.scheduler.errors|num }} err{% endif %}{% if s.scheduler.skipped %} · {{ s.scheduler.skipped|num }} salt.{% endif %}{% else %}—{% endif %}</td>
+          <td class="num">{% if s.ingest24 %}{{ s.ingest24.last24h_bytes|bytes }} <span class="{{ 'delta-down' if (s.ingest24.change or 0) < -0.5 else 'delta-up' if (s.ingest24.change or 0) > 1 else 'muted' }}">{{ s.ingest24.change|change }}</span>{% else %}—{% endif %}</td>
+          <td class="num">{{ s.silent|length if c.health and c.health.checks and c.health.checks.sources.ok else '—' }}</td>
+          {% endif %}
+          {% if 'ingest' in sections %}<td class="num">{{ s.avg_day|bytes if s.avg_day is not none else '—' }}</td>{% endif %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  {% for c in clients %}{% set s = summaries[c.name] %}
+  <section class="client">
+    <div class="client-head">
+      <h2>{{ c.name }}</h2>
+      <span class="host">{{ c.host }}{% if s.version %} · Splunk {{ s.version }}{% endif %}{% if s.server %} · {{ s.server }}{% endif %}</span>
+      {% if 'health' in sections %}<span class="level level-{{ s.level }}">{{ LEVEL_LABELS[s.level] }}</span>{% endif %}
+    </div>
+
+    {% if c.error %}<div class="error">No se pudo obtener información: {{ c.error }}</div>{% endif %}
+    {% for key, message in c.errors.items() %}<div class="error">Sección «{{ key }}»: {{ message }}</div>{% endfor %}
+
+    {% if 'health' in sections and not c.error %}
+      <h3>Diagnóstico</h3>
+      {% if s.problems %}
+        <ul class="problems">{% for p in s.problems %}<li class="{{ p.level }}">{{ p.text }}</li>{% endfor %}</ul>
+      {% else %}<p>Sin incidencias.</p>{% endif %}
+      <div class="tiles four">
+        <div class="tile"><div class="label">Alertas activas</div><div class="value">{% if s.alerts %}{{ (s.alerts.total - s.alerts.disabled)|num }}{% else %}—{% endif %}</div>
+          <div class="sub">{% if s.alerts %}de {{ s.alerts.total|num }} · {{ s.alerts.es|num }} de ES{% endif %}</div></div>
+        <div class="tile"><div class="label">Planificador 24 h</div><div class="value">{% if s.scheduler %}{{ s.scheduler.success|num }}{% else %}—{% endif %}</div>
+          <div class="sub">{% if s.scheduler %}{{ s.scheduler.skipped|num }} saltadas · {{ s.scheduler.errors|num }} con error{% endif %}</div></div>
+        <div class="tile"><div class="label">Ingesta 24 h</div><div class="value">{{ s.ingest24.last24h_bytes|bytes if s.ingest24 else '—' }}</div>
+          <div class="sub">{% if s.ingest24 %}media 7 d: {{ s.ingest24.avg7d_bytes|bytes }} {{ s.ingest24.change|change }}{% endif %}</div></div>
+        <div class="tile"><div class="label">Fuentes sin datos</div><div class="value">{{ s.silent|length }}</div><div class="sub">más de {{ report.threshold }} h</div></div>
+      </div>
+
+      {% if s.silent %}
+      <h3>Fuentes sin datos (más de {{ report.threshold }} h)</h3>
+      <table>
+        <thead><tr><th>Índice</th><th>Sourcetype</th><th>Último evento</th><th class="num">Eventos 7 d</th></tr></thead>
+        <tbody>{% for src in s.silent %}<tr><td>{{ src.index }}</td><td>{{ src.sourcetype }}</td><td class="nowrap">{{ src.last|time }}</td><td class="num">{{ src.count|num }}</td></tr>{% endfor %}</tbody>
+      </table>
+      {% endif %}
+
+      {% if s.scheduler and s.scheduler.problems %}
+      <h3>Planificador: búsquedas con problemas (24 h)</h3>
+      <table>
+        <thead><tr><th>Búsqueda</th><th>App</th><th>Estado</th><th>Motivo</th><th class="num">Veces</th></tr></thead>
+        <tbody>{% for p in s.scheduler.problems[:25] %}<tr><td class="wrap">{{ p.name or '—' }}</td><td>{{ p.app }}</td><td>{{ p.status }}</td><td class="wrap">{{ p.reason or '—' }}</td><td class="num">{{ p.count|num }}</td></tr>{% endfor %}</tbody>
+      </table>
+      {% if s.scheduler.problems|length > 25 %}<p class="muted">Y {{ s.scheduler.problems|length - 25 }} más (ver el informe Excel).</p>{% endif %}
+      {% endif %}
+    {% endif %}
+
+    {% if c.ingest %}
+      <h3>Ingesta de los últimos {{ report.days }} días</h3>
+      <p>Media diaria <strong>{{ c.ingest.avg_day|bytes }}</strong> · total del periodo {{ c.ingest.total|bytes }}{% if c.ingest.peak %} · pico {{ c.ingest.peak.bytes|bytes }} el {{ c.ingest.peak.day|day }}{% endif %}</p>
+      {{ columns_svg(c.ingest.days, c.ingest.totals) }}
+      <p class="muted">La última columna (más clara) es el día en curso. La línea discontinua es la media de los días completos.</p>
+      <div class="two">
+        <div>
+          <table>
+            <thead><tr><th>Índice</th><th class="num">Media/día</th><th class="num">Total</th></tr></thead>
+            <tbody>{% for r in c.ingest.indexes[:12] %}<tr><td class="wrap">{{ r.name }}</td><td class="num">{{ r.avg_day|bytes }}</td><td class="num">{{ r.total|bytes }}</td></tr>{% endfor %}</tbody>
+          </table>
+        </div>
+        <div>
+          <table>
+            <thead><tr><th>Sourcetype</th><th class="num">Media/día</th><th class="num">Total</th></tr></thead>
+            <tbody>{% for r in c.ingest.sourcetypes[:12] %}<tr><td class="wrap">{{ r.name }}</td><td class="num">{{ r.avg_day|bytes }}</td><td class="num">{{ r.total|bytes }}</td></tr>{% endfor %}</tbody>
+          </table>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if c.alerts is defined and c.alerts is not none %}
+      {% set enabled = c.alerts|rejectattr('disabled')|list %}
+      <h3>Alertas ({{ enabled|length }} habilitadas de {{ c.alerts|length }})</h3>
+      <table>
+        <thead><tr><th>Nombre</th><th>App</th><th>Tipo</th><th>Estado</th><th>Programación</th><th class="num">Sev.</th></tr></thead>
+        <tbody>{% for r in c.alerts %}<tr>
+          <td class="wrap">{{ r.name }}{% if r.es_label %}<div class="muted">{{ r.es_label }}</div>{% endif %}</td>
+          <td>{{ r.app }}</td><td>{{ alert_kind(r) }}</td>
+          <td>{{ 'Deshabilitada' if r.disabled else 'Habilitada' }}</td>
+          <td>{% if r.scheduled %}<code>{{ r.cron }}</code>{% else %}<span class="muted">No programada</span>{% endif %}</td>
+          <td class="num">{{ r.severity or '—' }}</td>
+        </tr>{% endfor %}</tbody>
+      </table>
+    {% endif %}
+
+    {% if c.indexes %}
+      <h3>Índices ({{ c.indexes|length }})</h3>
+      <table>
+        <thead><tr><th>Índice</th><th class="num">Eventos</th><th class="num">Tamaño</th><th class="num">Retención</th><th>Último evento</th></tr></thead>
+        <tbody>{% for r in c.indexes %}<tr><td>{{ r.name }}{% if r.disabled %} <span class="muted">(deshabilitado)</span>{% endif %}</td>
+          <td class="num">{{ r.events|num }}</td><td class="num">{{ (r.size_mb * 1048576)|bytes if r.size_mb is not none else '—' }}</td>
+          <td class="num">{{ r.retention_days|num(0) }} d{% if r.archive_days %} + {{ r.archive_days|num }} d archivo{% endif %}</td>
+          <td class="nowrap">{{ r.max_time|time }}</td></tr>{% endfor %}</tbody>
+      </table>
+    {% endif %}
+
+    {% if c.users %}
+      <h3>Usuarios ({{ c.users.users|length }})</h3>
+      <table>
+        <thead><tr><th>Usuario</th><th>Nombre</th><th>Roles</th><th>Último login</th></tr></thead>
+        <tbody>{% for u in c.users.users %}<tr><td>{{ u.name }}{% if u.locked %} <span class="muted">(bloqueado)</span>{% endif %}</td><td>{{ u.realname }}</td><td class="wrap">{{ u.roles|join(', ') }}</td><td class="nowrap">{{ epoch(u.last_login)|time }}</td></tr>{% endfor %}</tbody>
+      </table>
+      <h3>Roles ({{ c.users.roles|length }})</h3>
+      <table>
+        <thead><tr><th>Rol</th><th>Hereda de</th><th>Índices permitidos</th><th class="num">Capacidades propias</th></tr></thead>
+        <tbody>{% for r in c.users.roles %}<tr><td>{{ r.name }}</td><td class="wrap">{{ r.imported_roles|join(', ') or '—' }}</td><td class="wrap">{{ r.indexes_allowed|join(', ') or '—' }}</td><td class="num">{{ r.capabilities|length }}</td></tr>{% endfor %}</tbody>
+      </table>
+    {% endif %}
+  </section>
+  {% endfor %}
+
+  <div class="footer">Generado por Splunk Manager el {{ report.generated.strftime('%d/%m/%Y %H:%M') }}. Contiene información de configuración de los clientes: trátelo como confidencial.</div>
+</div>
+</body>
+</html>

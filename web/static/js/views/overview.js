@@ -17,7 +17,7 @@ export function clientCards(onPick) {
     h('div', { style: { minWidth: 0, flex: 1 } }, h('div', { class: 'wc-name' }, c.name), h('div', { class: 'wc-host' }, c.host)),
     c.connected ? h('span', { class: 'dot dot-good', title: 'Conectado' }) : null),
   h('div', { class: 'badges' },
-    h('span', { class: 'badge' }, icon(c.auth === 'token' ? 'key' : 'user'), c.auth === 'token' ? 'Token' : c.auth === 'user' ? c.username : 'Sin credenciales'),
+    h('span', { class: 'badge' }, icon(c.auth === 'token' ? 'key' : 'user'), c.auth === 'none' ? 'Sin credenciales' : c.methods?.length > 1 ? 'Contraseña y token' : c.auth === 'token' ? 'Token' : c.username),
     c.info?.version ? h('span', { class: 'badge badge-accent' }, `Splunk ${c.info.version}`) : null))));
 }
 

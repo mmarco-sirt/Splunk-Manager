@@ -1,4 +1,4 @@
-from core.clients import get_clients_from_config, manage_clients_cli
+from core.clients import ensure_config_exists, get_clients_from_config, manage_clients_cli, migrate_config_cli
 from core.connection import select_client, connect_to_splunk
 from core.paths import backup_dir
 from options.alerts.backup_alerts import TECNOLOGIAS, backup_alerts, backup_alerts_especific, backup_alerts_custom, backup_es_use_cases, backup_es_use_cases_custom
@@ -32,6 +32,8 @@ def get_multiple_clients_selection(all_clients):
 
 def main():
     backup_dir()  # Asegurar que la carpeta 'backups/' existe
+    ensure_config_exists()
+    migrate_config_cli()  # Cifra las credenciales que sigan en claro en config.py
 
     clientes = get_clients_from_config()
     if not clientes:

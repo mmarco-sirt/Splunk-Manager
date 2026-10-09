@@ -6,10 +6,10 @@ from flask import Flask, abort, jsonify, render_template, request, send_file
 from splunklib.binding import AuthenticationError, HTTPError
 from werkzeug.exceptions import HTTPException
 
-from core.clients import ensure_config_exists
+from core.clients import ensure_config_exists, migrate_config
 from core.paths import backup_dir
 from options.alerts.backup_alerts import TECNOLOGIAS
-from web import explorer, operations, services
+from web import alert_editor, compare, explorer, operations, reports, services
 from web.health import monitor as health_monitor
 from web.jobs import install_output_router, jobs
 from web.operations import BACKUP_FOLDERS, OperationError
@@ -39,6 +39,11 @@ def create_app(password=None, restrict_host=True):
     app.json.sort_keys = False
     install_output_router()
     ensure_config_exists()
+    try:
+        for message in migrate_config():  # Cifra las credenciales que sigan en claro en config.py
+            print(message)
+    except Exception as e:
+        print(f"❌ No se pudieron cifrar las credenciales de config.py: {e}")
     backup_dir()
 
     @app.before_request
@@ -105,6 +110,9 @@ def create_app(password=None, restrict_host=True):
             folders={k: {"label": v["label"], "prefix": v["prefix"], "itemized": bool(v["key"])}
                      for k, v in BACKUP_FOLDERS.items()},
             sharing=list(operations.SHARING_LEVELS),
+            compare_types=compare.types_meta(),
+            report_sections=reports.SECTIONS,
+            report_formats=reports.formats(),
         )
 
     # --- Clientes ---
@@ -116,6 +124,10 @@ def create_app(password=None, restrict_host=True):
     @app.post("/api/clients")
     def clients_create():
         return jsonify(services.create_client(body())), 201
+
+    @app.post("/api/clients/test")
+    def clients_test():
+        return jsonify(services.test_credentials(body()))
 
     @app.put("/api/clients/<path:name>")
     def clients_update(name):
@@ -151,6 +163,25 @@ def create_app(password=None, restrict_host=True):
         service = services.get_service(client_param())
         return jsonify(explorer.saved_search_action(
             service, data.get("name"), data.get("app"), data.get("owner"), data.get("action")))
+
+    @app.get("/api/splunk/saved-searches/detail")
+    def saved_search_detail():
+        service = services.get_service(client_param())
+        return jsonify(alert_editor.saved_search_detail(
+            service, request.args.get("name"), request.args.get("app"), request.args.get("owner")))
+
+    @app.post("/api/splunk/saved-searches/update")
+    def saved_search_update():
+        data = body()
+        service = services.get_service(client_param())
+        return jsonify(alert_editor.update_saved_search(
+            service, data.get("name"), data.get("app"), data.get("owner"), data.get("changes")))
+
+    @app.post("/api/splunk/saved-searches/bulk-update")
+    def saved_search_bulk_update():
+        data = body()
+        service = services.get_service(client_param())
+        return jsonify(alert_editor.bulk_update(service, data.get("items") or [], data.get("changes")))
 
     @app.get("/api/ingest")
     def ingest():
@@ -223,6 +254,46 @@ def create_app(password=None, restrict_host=True):
         job = jobs.start(f"{title} · {clients_suffix(clients)}", "restore", clients,
                          operations.run_for_clients(clients, action))
         return jsonify(job.summary()), 202
+
+    @app.post("/api/compare")
+    def compare_run():
+        data = body()
+        return jsonify(compare.compare_clients(data.get("type"), data.get("reference"), data.get("targets") or [],
+                                               data.get("fields") or "main"))
+
+    @app.post("/api/compare/copy")
+    def compare_copy():
+        data = body()
+        target_clients({"clients": [data.get("source")] + list(data.get("targets") or [])})
+        title, action = compare.build_copy(data.get("type"), data.get("source"), data.get("targets"),
+                                           data.get("names"), data.get("options") or {})
+        job = jobs.start(title, "copy", list(data.get("targets") or []), action)
+        return jsonify(job.summary()), 202
+
+    # --- Informes ---
+
+    @app.get("/api/reports")
+    def reports_list():
+        return jsonify(reports.list_reports())
+
+    @app.post("/api/reports")
+    def reports_create():
+        data = body()
+        clients = target_clients(data)
+        title, action = reports.build_report(clients, data.get("sections"), data.get("formats"), data.get("options") or {})
+        job = jobs.start(title, "report", clients, action)
+        return jsonify(job.summary()), 202
+
+    @app.get("/api/reports/<name>")
+    def reports_download(name):
+        path = reports.report_path(name)
+        inline = request.args.get("inline") == "1" and not name.endswith(".xlsx")
+        return send_file(path, as_attachment=not inline, download_name=name)
+
+    @app.delete("/api/reports/<name>")
+    def reports_delete(name):
+        os.remove(reports.report_path(name))
+        return jsonify(ok=True)
 
     @app.get("/api/jobs")
     def jobs_list():

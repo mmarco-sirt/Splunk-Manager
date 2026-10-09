@@ -27,8 +27,11 @@ function lineClass(line) {
   return '';
 }
 
+const KIND_LABELS = { backup: 'Backup', restore: 'Restore', copy: 'Copia entre clientes', report: 'Informe' };
+
 function fileHref(path) {
   const [folder, ...rest] = path.split('/');
+  if (folder === 'informes') return `/api/reports/${enc(rest.join('/'))}`;
   return `/api/backups/${enc(folder)}/${enc(rest.join('/'))}/download`;
 }
 
@@ -59,7 +62,7 @@ export function openJobDrawer(jobId) {
       job.warnings ? h('span', { class: 'status status-warn' }, `${job.warnings} avisos`) : null]);
     clear(filesEl);
     if (job.files?.length) {
-      filesEl.append(h('h4', { class: 'section-title', style: { marginTop: '0' } }, 'Archivos de backup generados o modificados'),
+      filesEl.append(h('h4', { class: 'section-title', style: { marginTop: '0' } }, 'Archivos generados o modificados'),
         h('ul', { class: 'list-plain' }, job.files.map((f) => h('li', {},
           h('a', { class: 'file-link', href: fileHref(f) }, icon('download'), f)))));
     }
@@ -99,7 +102,7 @@ export default {
       initialSort: { key: 'started', dir: 'desc' },
       emptyIcon: 'activity',
       emptyTitle: 'Todavía no hay tareas',
-      emptyText: 'Los backups y restores que lance aparecerán aquí con su log completo.',
+      emptyText: 'Los backups, restores, copias entre clientes e informes que lance aparecerán aquí con su log completo.',
       onRowClick: (j) => openJobDrawer(j.id),
       filters: [{
         id: 'status',
@@ -111,7 +114,7 @@ export default {
       }],
       columns: [
         { key: 'status', label: 'Estado', render: jobStatus, sort: (j) => j.status },
-        { key: 'title', label: 'Tarea', render: (j) => h('div', {}, h('div', { class: 'cell-main' }, j.title), h('div', { class: 'cell-sub' }, j.kind === 'backup' ? 'Backup' : 'Restore')) },
+        { key: 'title', label: 'Tarea', render: (j) => h('div', {}, h('div', { class: 'cell-main' }, j.title), h('div', { class: 'cell-sub' }, KIND_LABELS[j.kind] || j.kind)) },
         { key: 'clients', label: 'Clientes', render: (j) => j.clients.join(', '), sort: (j) => j.clients.join(',') },
         { key: 'started', label: 'Inicio', defaultDir: 'desc', render: (j) => h('span', { title: fmtDate(j.started) }, fmtRelative(j.started)) },
         { key: 'duration', label: 'Duración', className: 'num', sort: (j) => (j.finished || Date.now() / 1000) - j.started, render: (j) => fmtDuration((j.finished || Date.now() / 1000) - j.started) },

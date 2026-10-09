@@ -15,6 +15,8 @@ import { macrosView, dashboardsView, usersView, rolesView, indexesView, appsView
 import backups from './views/backups.js';
 import batch from './views/batch.js';
 import clients from './views/clients.js';
+import compare from './views/compare.js';
+import reports from './views/reports.js';
 import activity, { openJobDrawer } from './views/activity.js';
 
 const NAV = [
@@ -22,7 +24,7 @@ const NAV = [
   { title: 'Objetos', items: [alertsView, reportsView, macrosView, dashboardsView] },
   { title: 'Acceso', items: [usersView, rolesView] },
   { title: 'Plataforma', items: [indexesView, ingest, appsView] },
-  { title: 'Gestión', items: [backups, batch, clients, activity] },
+  { title: 'Gestión', items: [compare, reports, backups, batch, clients, activity] },
 ];
 const VIEWS = new Map(NAV.flatMap((g) => g.items).map((v) => [v.id, v]));
 
@@ -267,7 +269,7 @@ async function init() {
   on('jobs', renderTasksButton);
   on('open-job', (id) => openJobDrawer(id));
   on('job-finished', (job) => {
-    if (job.kind === 'backup') invalidateBackups();
+    if (job.kind === 'backup' || job.kind === 'copy') invalidateBackups();
     if (currentView().id === 'backups') scheduleRender();
   });
   on('route', () => renderRoute({ scroll: true }));

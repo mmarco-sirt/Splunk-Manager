@@ -111,6 +111,85 @@ def check_client(name):
     return {**result, "status": "done", "info": services.server_info(name), "checks": checks, "finished": time.time()}
 
 
+# --- Diagnóstico (misma lógica que evaluate() de web/static/js/views/health.js) ------------------
+
+RANK = {"pending": -1, "ok": 0, "info": 0, "warning": 1, "serious": 2, "critical": 3}
+LEVEL_LABELS = {"ok": "Correcto", "info": "Info", "warning": "Aviso", "serious": "Problema", "critical": "Crítico",
+                "pending": "Sin analizar"}
+CHECK_LABELS = {"alerts": "las alertas", "scheduler": "el planificador", "ingest": "la ingesta",
+                "sources": "las fuentes de datos"}
+
+
+def _num(n):
+    return f"{int(n):,}".replace(",", ".")
+
+
+def _pct(n):
+    return f"{round(n * 100)} %"
+
+
+def source_key(client, source):
+    return f"{client}|{source.get('index')}|{source.get('sourcetype')}"
+
+
+def evaluate(result, threshold_hours=24, ignored=(), now=None):
+    """Nivel global y lista de problemas de un cliente: {level, problems: [{level, text}], silent: [fuentes]}."""
+    problems = []
+    ignored = set(ignored or ())
+
+    def add(level, text):
+        problems.append({"level": level, "text": text})
+
+    if not result or not result.get("checks"):
+        if result and result.get("status") == "error":
+            add("critical", f"Sin conexión: {result.get('error')}")
+            return {"level": "critical", "problems": problems, "silent": []}
+        return {"level": "pending", "problems": problems, "silent": []}
+    if result.get("status") == "error":
+        add("critical", f"Sin conexión: {result.get('error')}")
+
+    checks = result["checks"]
+    for key, check in checks.items():
+        if not check.get("ok"):
+            add("warning", f"No se pudo comprobar {CHECK_LABELS.get(key, key)}: {check.get('error')}")
+
+    scheduler = checks.get("scheduler", {}).get("data") if checks.get("scheduler", {}).get("ok") else None
+    if scheduler and scheduler.get("errors"):
+        add("serious", f"{_num(scheduler['errors'])} ejecuciones del planificador con error en 24 h")
+    if scheduler and scheduler.get("skipped"):
+        add("warning", f"{_num(scheduler['skipped'])} ejecuciones del planificador saltadas en 24 h")
+
+    silent = []
+    if checks.get("sources", {}).get("ok"):
+        limit = (now or time.time()) - threshold_hours * 3600
+        silent = [s for s in checks["sources"]["data"]
+                  if s["last"] < limit and source_key(result.get("client"), s) not in ignored]
+        if silent:
+            noun = "fuente sin datos" if len(silent) == 1 else "fuentes sin datos"
+            add("serious", f"{len(silent)} {noun} en las últimas {threshold_hours} h")
+
+    ingest = checks.get("ingest", {}).get("data") if checks.get("ingest", {}).get("ok") else None
+    if ingest and ingest.get("avg7d_bytes", 0) > 0:
+        if ingest.get("last24h_bytes") == 0:
+            add("critical", "No ha entrado ningún dato en las últimas 24 h")
+        elif ingest.get("change") is not None and ingest["change"] < -0.5:
+            add("serious", f"La ingesta ha caído un {_pct(-ingest['change'])} respecto a la media de 7 días")
+        elif ingest.get("change") is not None and ingest["change"] > 1:
+            add("warning", f"La ingesta ha subido un {_pct(ingest['change'])} respecto a la media de 7 días")
+
+    alerts = checks.get("alerts", {}).get("data") if checks.get("alerts", {}).get("ok") else None
+    if alerts and alerts.get("cu_disabled"):
+        n = alerts["cu_disabled"]
+        add("info", f"{n} caso de uso CU- deshabilitado" if n == 1 else f"{n} casos de uso CU- deshabilitados")
+
+    level = "ok"
+    for p in problems:
+        if RANK[p["level"]] > RANK[level]:
+            level = p["level"]
+    problems.sort(key=lambda p: RANK[p["level"]], reverse=True)
+    return {"level": level, "problems": problems, "silent": silent}
+
+
 class HealthMonitor:
     """Lanza las comprobaciones en segundo plano y guarda el último resultado de cada cliente."""
 
@@ -136,6 +215,12 @@ class HealthMonitor:
             result = {"client": name, "status": "error", "error": f"{type(e).__name__}: {e}", "finished": time.time()}
         with self._lock:
             self._results[name] = result
+
+    def store(self, name, result):
+        """Guarda un resultado obtenido fuera del monitor (p. ej. al generar un informe)."""
+        with self._lock:
+            if self._results.get(name, {}).get("status") != "running":
+                self._results[name] = result
 
     def snapshot(self):
         with self._lock:

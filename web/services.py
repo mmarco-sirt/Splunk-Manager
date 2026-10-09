@@ -2,13 +2,16 @@
 import threading
 import time
 
-from core.clients import get_clients_from_config, save_clients_to_config
-from core.connection import connect_to_splunk
+from core import vault
+from core.clients import (
+    AUTH_METHODS, credential_problems, get_clients_from_config, preferred_auth, save_clients_to_config,
+)
+from core.connection import auth_methods, connect_to_splunk
 from web.jobs import capture_output
 
 CLIENT_FIELDS = ("name", "host", "username", "password", "splunkToken")
 
-_services = {}   # nombre de cliente -> {"service", "connected_at", "info"}
+_services = {}   # nombre de cliente -> {"service", "connected_at", "info", "method"}
 _connect_locks = {}
 _lock = threading.Lock()
 
@@ -21,21 +24,19 @@ def public_client(client):
     """Datos del cliente aptos para el navegador: nunca incluye contraseña ni token."""
     name = client.get("name", "")
     conn = _services.get(name)
-    if client.get("username") and client.get("password"):
-        auth = "user"
-    elif client.get("splunkToken"):
-        auth = "token"
-    else:
-        auth = "none"
+    methods = auth_methods(client)
     return {
         "name": name,
         "host": client.get("host", ""),
         "username": client.get("username", ""),
         "has_password": bool(client.get("password")),
         "has_token": bool(client.get("splunkToken")),
-        "auth": auth,
+        "auth": preferred_auth(client) if methods else "none",   # método preferido
+        "methods": methods,                                       # métodos configurados, el preferido primero
+        "credential_problems": credential_problems(client),      # credenciales que no se pueden descifrar
         "connected": conn is not None,
         "connected_at": conn["connected_at"] if conn else None,
+        "connected_with": conn["method"] if conn else None,
         "info": conn["info"] if conn else None,
     }
 
@@ -85,21 +86,27 @@ def connect(name, force=False):
         return _do_connect(name)
 
 
-def _do_connect(name):
-    client = find_client(name)
+def _open(client, method=None):
+    """Conecta con el cliente (con un método concreto o con el preferido y, si falla, el otro)."""
     with capture_output() as output:
-        service = connect_to_splunk(client)
+        service = connect_to_splunk(client, method=method)
     if not service:
         message = "".join(output).strip() or "No se pudo conectar."
-        raise ClientError(f"{name}: {message}")
+        raise ClientError(f"{client.get('name') or client.get('host')}: {message}")
+    return service
 
+
+def _do_connect(name):
+    client = find_client(name)
+    service = _open(client)
     try:
         info = _server_info(service)
     except Exception as e:
         raise ClientError(f"{name}: conectado, pero no se pudo leer la información del servidor: {e}")
 
     with _lock:
-        _services[name] = {"service": service, "connected_at": time.time(), "info": info}
+        _services[name] = {"service": service, "connected_at": time.time(), "info": info,
+                           "method": getattr(service, "auth_method", None)}
     return service
 
 
@@ -130,6 +137,22 @@ def _clean(data):
     return {k: str(data[k]).strip() for k in CLIENT_FIELDS if data.get(k) and str(data[k]).strip()}
 
 
+def _apply_auth(client, auth):
+    """Guarda el método preferido solo si el cliente tiene los dos tipos de credenciales."""
+    if client.get("username") and client.get("password") and client.get("splunkToken") and auth in AUTH_METHODS:
+        client["auth"] = auth
+    else:
+        client.pop("auth", None)
+
+
+def _save(clients):
+    try:
+        with capture_output():
+            save_clients_to_config(clients)
+    except vault.VaultError as e:
+        raise ClientError(str(e))
+
+
 def create_client(data):
     new_client = _clean(data)
     if not new_client.get("name") or not new_client.get("host"):
@@ -137,9 +160,9 @@ def create_client(data):
     clients = get_clients_from_config()
     if any(c.get("name") == new_client["name"] for c in clients):
         raise ClientError(f"Ya existe un cliente con el nombre '{new_client['name']}'.")
+    _apply_auth(new_client, data.get("auth"))
     clients.append(new_client)
-    with capture_output():
-        save_clients_to_config(clients)
+    _save(clients)
     return public_client(new_client)
 
 
@@ -167,10 +190,10 @@ def update_client(name, data):
             current.pop(field, None)
         elif changes.get(field):
             current[field] = changes[field]
+    _apply_auth(current, data.get("auth") or current.get("auth"))
 
     clients[index] = current
-    with capture_output():
-        save_clients_to_config(clients)
+    _save(clients)
     disconnect(name)
     return public_client(current)
 
@@ -180,6 +203,48 @@ def delete_client(name):
     remaining = [c for c in clients if c.get("name") != name]
     if len(remaining) == len(clients):
         raise ClientError(f"No existe el cliente '{name}'.")
-    with capture_output():
-        save_clients_to_config(remaining)
+    _save(remaining)
     disconnect(name)
+
+
+def test_credentials(data):
+    """
+    Prueba unas credenciales con un método concreto sin guardarlas. Si se indica 'original' (cliente existente),
+    los campos vacíos usan sus valores guardados. Devuelve {ok, method, message, version, serverName}.
+    """
+    method = data.get("method")
+    if method not in AUTH_METHODS:
+        raise ClientError("Método de autenticación no válido.")
+    client = dict(find_client(data["original"])) if data.get("original") else {}
+    changes = _clean(data)
+    secret = "password" if method == "password" else "splunkToken"
+    if client and changes.get("host") and changes["host"].lower() != client.get("host", "").lower() and not changes.get(secret):
+        # Nunca se envía una credencial guardada a un host distinto del suyo
+        raise ClientError(f"Para probar con otro host, vuelva a escribir {'la contraseña' if secret == 'password' else 'el token'}.")
+    for field in ("name", "host", "username"):
+        if field in changes:
+            client[field] = changes[field]
+    for field, clear_flag in (("password", "clear_password"), ("splunkToken", "clear_token")):
+        if data.get(clear_flag):
+            client.pop(field, None)
+        if changes.get(field):
+            client[field] = changes[field]
+    if not client.get("host"):
+        raise ClientError("Indique el host.")
+    client.setdefault("name", client["host"])
+
+    label = AUTH_METHODS[method]
+    try:
+        service = _open(client, method=method)
+    except ClientError as e:
+        return {"ok": False, "method": method, "message": str(e)}
+    try:
+        info = _server_info(service)
+    finally:
+        try:
+            if method == "password":
+                service.logout()
+        except Exception:
+            pass
+    return {"ok": True, "method": method, "message": f"Conexión correcta con {label}",
+            "version": info.get("version"), "serverName": info.get("serverName")}

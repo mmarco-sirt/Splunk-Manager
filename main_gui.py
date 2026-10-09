@@ -7,7 +7,10 @@ import queue
 import builtins
 
 from core.backup_files import list_backup_files
-from core.clients import ensure_config_exists, get_clients_from_config, save_clients_to_config
+from core.clients import (
+    credential_problems, ensure_config_exists, get_clients_from_config, migrate_config, preferred_auth,
+    save_clients_to_config,
+)
 from core.connection import connect_to_splunk
 from core.paths import backup_dir
 from options.alerts.backup_alerts import (
@@ -58,6 +61,10 @@ class SplunkApp(tk.Tk):
         self.service = None
         self.current_client = None
         ensure_config_exists()
+        try:
+            migration_messages = migrate_config()  # Cifra las credenciales que sigan en claro en config.py
+        except Exception as e:
+            migration_messages = [f"❌ No se pudieron cifrar las credenciales de config.py: {e}"]
         self.clients = get_clients_from_config()
 
         self.input_queue = queue.Queue()
@@ -72,6 +79,8 @@ class SplunkApp(tk.Tk):
         
         print("Bienvenido a Splunk Manager GUI.")
         print("Seleccione un cliente en la parte superior y haga clic en 'Conectar' para empezar.\n")
+        for message in migration_messages:
+            print(message)
 
     def override_input(self):
         self.original_input = builtins.input
@@ -398,8 +407,8 @@ class SplunkApp(tk.Tk):
     def manage_clients_gui(self):
         win = tk.Toplevel(self)
         win.title("Gestionar Clientes (Permanente)")
-        win.geometry("750x400")
-        win.minsize(600, 350)
+        win.geometry("820x540")
+        win.minsize(680, 500)
         win.grab_set()
 
         # --- Left Frame (List) ---
@@ -420,16 +429,29 @@ class SplunkApp(tk.Tk):
         right_frame = ttk.LabelFrame(win, text="Detalles del Cliente", padding=15)
         right_frame.pack(side="right", fill="both", expand=True, padx=10, pady=10)
 
-        fields = ["name", "host", "username", "password", "splunkToken"]
+        # Las contraseñas y tokens nunca se muestran: vacío = mantener el guardado
+        labels = {"name": "Nombre", "host": "Host", "username": "Usuario", "password": "Contraseña", "splunkToken": "Token"}
         entries = {}
-        for i, field in enumerate(fields):
-            ttk.Label(right_frame, text=f"{field.capitalize()}:").grid(row=i, column=0, sticky="w", pady=2, padx=5)
-            entry = ttk.Entry(right_frame, width=40)
-            if "password" in field or "token" in field:
-                entry.config(show="*")
-            entry.grid(row=i, column=1, sticky="ew", pady=2, padx=5)
+        hints = {}
+        for i, (field, label) in enumerate(labels.items()):
+            ttk.Label(right_frame, text=f"{label}:").grid(row=i * 2, column=0, sticky="w", pady=2, padx=5)
+            entry = ttk.Entry(right_frame, width=40, show="*" if field in ("password", "splunkToken") else "")
+            entry.grid(row=i * 2, column=1, sticky="ew", pady=2, padx=5)
             entries[field] = entry
+            if field in ("password", "splunkToken"):
+                hint = ttk.Label(right_frame, text="", foreground="gray")
+                hint.grid(row=i * 2 + 1, column=1, sticky="w", padx=5)
+                hints[field] = hint
+        clear_vars = {"password": tk.BooleanVar(), "splunkToken": tk.BooleanVar()}
+        ttk.Checkbutton(right_frame, text="Quitar la contraseña guardada", variable=clear_vars["password"]).grid(row=10, column=1, sticky="w", padx=5)
+        ttk.Checkbutton(right_frame, text="Quitar el token guardado", variable=clear_vars["splunkToken"]).grid(row=11, column=1, sticky="w", padx=5)
+        ttk.Label(right_frame, text="Método preferido:").grid(row=12, column=0, sticky="w", pady=(8, 2), padx=5)
+        auth_labels = {"password": "Usuario y contraseña", "token": "Token"}
+        auth_combo = ttk.Combobox(right_frame, state="readonly", values=list(auth_labels.values()))
+        auth_combo.grid(row=12, column=1, sticky="w", pady=(8, 2), padx=5)
+        ttk.Label(right_frame, text="Si el preferido falla por credenciales, se prueba el otro.", foreground="gray").grid(row=13, column=1, sticky="w", padx=5)
         right_frame.grid_columnconfigure(1, weight=1)
+        selected = {"client": None}
 
         # --- Functions ---
         def refresh_listbox():
@@ -437,23 +459,34 @@ class SplunkApp(tk.Tk):
             for c in get_clients_from_config():
                 listbox.insert(tk.END, c['name'])
 
+        def show_client(client_data):
+            selected["client"] = client_data
+            for field, entry in entries.items():
+                entry.delete(0, tk.END)
+                if client_data and field not in ("password", "splunkToken"):
+                    entry.insert(0, client_data.get(field, ""))
+            problems = credential_problems(client_data) if client_data else []
+            for field, hint in hints.items():
+                if field in problems:
+                    hint.config(text="⚠ Guardada pero no se puede descifrar: vuelva a introducirla", foreground="red")
+                elif client_data and client_data.get(field):
+                    hint.config(text="Guardada (cifrada). Deje vacío para mantenerla.", foreground="gray")
+                else:
+                    hint.config(text="No configurada", foreground="gray")
+            for var in clear_vars.values():
+                var.set(False)
+            auth_combo.set(auth_labels[preferred_auth(client_data)] if client_data else auth_labels["password"])
+
         def on_listbox_select(event):
             selection_indices = listbox.curselection()
             if not selection_indices:
                 return
-            
             selected_name = listbox.get(selection_indices[0])
-            client_data = next((c for c in get_clients_from_config() if c['name'] == selected_name), None)
-
-            if client_data:
-                for field, entry in entries.items():
-                    entry.delete(0, tk.END)
-                    entry.insert(0, client_data.get(field, ""))
+            show_client(next((c for c in get_clients_from_config() if c['name'] == selected_name), None))
 
         def add_new():
             listbox.selection_clear(0, tk.END)
-            for entry in entries.values():
-                entry.delete(0, tk.END)
+            show_client(None)
             entries["name"].focus()
 
         def delete_selected():
@@ -469,37 +502,52 @@ class SplunkApp(tk.Tk):
             current_clients = get_clients_from_config()
             updated_clients = [c for c in current_clients if c['name'] != selected_name]
             save_clients_to_config(updated_clients)
-            
+
             print(f"🗑️ Cliente '{selected_name}' eliminado permanentemente.")
             refresh_listbox()
             self.refresh_client_list()
             add_new() # Clear fields
 
         def save_changes():
-            new_data = {field: entry.get() for field, entry in entries.items()}
+            new_data = {field: entry.get().strip() for field, entry in entries.items()}
             if not new_data.get('name') or not new_data.get('host'):
                 messagebox.showerror("Error", "El nombre y el host son campos obligatorios.")
                 return
 
             current_clients = get_clients_from_config()
-            selection_indices = listbox.curselection()
+            original = selected["client"]
+            index = next((i for i, c in enumerate(current_clients) if original and c['name'] == original['name']), None)
+            if any(c['name'] == new_data['name'] for i, c in enumerate(current_clients) if i != index):
+                messagebox.showerror("Error", f"Ya existe un cliente con el nombre '{new_data['name']}'.")
+                return
 
-            if selection_indices: # Modifying existing
-                selected_name = listbox.get(selection_indices[0])
-                for i, client in enumerate(current_clients):
-                    if client['name'] == selected_name:
-                        current_clients[i] = {k: v for k, v in new_data.items() if v} # Clean empty values
-                        break
-            else: # Adding new
-                if any(c['name'] == new_data['name'] for c in current_clients):
-                    messagebox.showerror("Error", f"Ya existe un cliente con el nombre '{new_data['name']}'.")
-                    return
-                current_clients.append({k: v for k, v in new_data.items() if v})
+            client = dict(current_clients[index]) if index is not None else {}
+            client.update(name=new_data['name'], host=new_data['host'], username=new_data['username'])
+            for field in ("password", "splunkToken"):
+                if clear_vars[field].get():
+                    client.pop(field, None)
+                elif new_data[field]:
+                    client[field] = new_data[field]
+            client = {k: v for k, v in client.items() if v}
+            auth = next(k for k, v in auth_labels.items() if v == auth_combo.get())
+            if client.get('username') and client.get('password') and client.get('splunkToken'):
+                client['auth'] = auth
+            else:
+                client.pop('auth', None)
+
+            if index is not None:
+                current_clients[index] = client
+            else:
+                current_clients.append(client)
 
             save_clients_to_config(current_clients)
-            print("💾 Cambios guardados permanentemente en config.py.")
+            print("💾 Cambios guardados permanentemente en config.py (credenciales cifradas).")
             refresh_listbox()
             self.refresh_client_list()
+            names = listbox.get(0, tk.END)
+            if client['name'] in names:
+                listbox.selection_set(names.index(client['name']))
+            show_client(next((c for c in get_clients_from_config() if c['name'] == client['name']), None))
 
         # --- Buttons ---
         btn_frame_left = ttk.Frame(left_frame)
@@ -507,11 +555,12 @@ class SplunkApp(tk.Tk):
         ttk.Button(btn_frame_left, text="Añadir Nuevo", command=add_new).pack(side="left", expand=True, fill="x", padx=2)
         ttk.Button(btn_frame_left, text="Eliminar", command=delete_selected).pack(side="left", expand=True, fill="x", padx=2)
 
-        ttk.Button(right_frame, text="💾 Guardar Cambios", command=save_changes).grid(row=len(fields), column=0, columnspan=2, pady=15, ipady=5)
+        ttk.Button(right_frame, text="💾 Guardar Cambios", command=save_changes).grid(row=14, column=0, columnspan=2, pady=15, ipady=5)
 
         # --- Initial Load ---
         listbox.bind("<<ListboxSelect>>", on_listbox_select)
         refresh_listbox()
+        show_client(None)
 
     def select_multiple_clients(self, callback):
         win = tk.Toplevel(self)

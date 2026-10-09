@@ -250,7 +250,8 @@ _MISSING = object()
 MAX_DIFF_LINES = 400
 
 
-def _diff_fields(old, new):
+def diff_fields(old, new):
+    """Diferencias campo a campo entre dos elementos: [{field, before, after, diff}] (None = no existía)."""
     old_flat, new_flat = _flatten(old), _flatten(new)
     fields = []
     for field in sorted(set(old_flat) | set(new_flat)):
@@ -286,7 +287,7 @@ def diff_backup(folder, filename, old_id, new_id):
     common = set(old_map) & set(new_map)
     changed = []
     for name in sorted(common):
-        fields = _diff_fields(old_map[name], new_map[name])
+        fields = diff_fields(old_map[name], new_map[name])
         if fields:
             changed.append({"name": name, "fields": fields})
     return {

@@ -10,6 +10,7 @@ else:
 
 CONFIG_PATH = os.path.join(BASE_DIR, "config.py")
 BACKUP_ROOT = os.path.join(BASE_DIR, "backups")
+REPORTS_ROOT = os.path.join(BASE_DIR, "informes")
 
 
 def backup_dir(name=""):
@@ -17,6 +18,12 @@ def backup_dir(name=""):
     path = os.path.join(BACKUP_ROOT, name)
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def reports_dir():
+    """Devuelve la ruta absoluta de informes/ y la crea si no existe."""
+    os.makedirs(REPORTS_ROOT, exist_ok=True)
+    return REPORTS_ROOT
 
 
 def host_tag(service):

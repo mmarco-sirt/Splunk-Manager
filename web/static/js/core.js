@@ -167,13 +167,13 @@ export async function refreshJobs() {
 }
 
 function onJobFinished(job) {
-  if (job.kind === 'restore') {
+  if (job.kind === 'restore' || job.kind === 'copy') {
     for (const client of job.clients) invalidate(client, RESTORE_RESOURCES[job.folder] || null);
   }
   emit('job-finished', job);
   const text = {
     success: `Tarea completada: ${job.title}`,
-    partial: `Tarea completada con ${job.errors} errores: ${job.title}`,
+    partial: `Tarea completada con ${job.errors} ${job.errors === 1 ? 'error' : 'errores'}: ${job.title}`,
     error: `La tarea falló: ${job.title}`,
   }[job.status] || job.title;
   const type = { success: 'success', partial: 'warn', error: 'error' }[job.status] || 'info';
