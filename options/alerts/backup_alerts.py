@@ -1,15 +1,10 @@
-import json
 import os
-import threading
 
-from core.backup_files import write_backup
+from core.backup_files import EDIT_LABEL, merge_backup, write_backup
 from core.paths import backup_dir, host_tag
 
 BACKUP_FOLDER = "alertas"
 TECNOLOGIAS = ["AD", "FW", "AV", "PX", "MAIL", "O365", "MI"]
-EDIT_LABEL = "antes_de_editar"
-
-_edit_backup_lock = threading.Lock()
 
 
 def _is_alert(saved_search):
@@ -77,20 +72,10 @@ def backup_before_edit(service, saved_searches):
         by_folder.setdefault(folder, []).append(backup_entry(s))
 
     paths = []
-    with _edit_backup_lock:
-        for folder, entries in by_folder.items():
-            path = os.path.join(backup_dir(folder), f"{folder}_{EDIT_LABEL}_{host_tag(service)}_backup.json")
-            existing = []
-            if os.path.exists(path):
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        existing = json.load(f)
-                except (OSError, ValueError):
-                    existing = []
-            names = {e["name"] for e in entries}
-            data = [e for e in existing if isinstance(e, dict) and e.get("name") not in names] + entries
-            write_backup(path, data)
-            paths.append(path)
+    for folder, entries in by_folder.items():
+        path = os.path.join(backup_dir(folder), f"{folder}_{EDIT_LABEL}_{host_tag(service)}_backup.json")
+        merge_backup(path, entries)
+        paths.append(path)
     return paths
 
 

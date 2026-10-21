@@ -17,6 +17,7 @@ from core.paths import backup_dir, host_tag
 from options.alerts.backup_alerts import _is_alert, _is_es_use_case
 from options.alerts.restore_alerts import READ_ONLY_FIELDS
 from options.dashboards.backup_dashboard import backup_dashboard
+from options.macros.backup_macros import macro_entry
 from web import services
 from web.explorer import _read_json, list_apps, list_indexes, list_users
 from web.operations import BACKUP_FOLDERS, SHARING_LEVELS, OperationError, diff_fields
@@ -85,7 +86,7 @@ def _macros(service):
         c = m.content
         app = m.access.get("app")
         items[_unique_key(items, m.name, app)] = {
-            "entry": {"name": m.name, "definition": c.get("definition") or "", "args": c.get("args") or ""},
+            "entry": macro_entry(m),   # incluye iseval, estado y descripción para que la copia funcione igual
             "compare": {"definition": _text(c.get("definition")), "args": _text(c.get("args")),
                         "iseval": _text(c.get("iseval")), "disabled": _text(c.get("disabled")),
                         "description": _text(c.get("description"))},

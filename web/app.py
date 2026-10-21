@@ -9,7 +9,9 @@ from werkzeug.exceptions import HTTPException
 from core.clients import ensure_config_exists, migrate_config
 from core.paths import backup_dir
 from options.alerts.backup_alerts import TECNOLOGIAS
-from web import alert_analysis, alert_editor, compare, explorer, multi_edit, operations, reports, services
+from web import (
+    alert_analysis, alert_editor, compare, explorer, macro_editor, multi_edit, operations, reports, services,
+)
 from web.health import monitor as health_monitor
 from web.jobs import install_output_router, jobs
 from web.operations import BACKUP_FOLDERS, OperationError
@@ -183,6 +185,25 @@ def create_app(password=None, restrict_host=True):
         data = body()
         service = services.get_service(client_param())
         return jsonify(alert_editor.bulk_update(service, data.get("items") or [], data.get("changes")))
+
+    @app.get("/api/splunk/macros/detail")
+    def macro_detail():
+        service = services.get_service(client_param())
+        return jsonify(macro_editor.macro_detail(
+            service, request.args.get("name"), request.args.get("app"), request.args.get("owner")))
+
+    @app.post("/api/splunk/macros/update")
+    def macro_update():
+        data = body()
+        service = services.get_service(client_param())
+        return jsonify(macro_editor.update_macro(
+            service, data.get("name"), data.get("app"), data.get("owner"), data.get("changes")))
+
+    @app.post("/api/splunk/macros/bulk-update")
+    def macro_bulk_update():
+        data = body()
+        service = services.get_service(client_param())
+        return jsonify(macro_editor.bulk_update(service, data.get("items") or [], data.get("changes")))
 
     @app.get("/api/ingest")
     def ingest():

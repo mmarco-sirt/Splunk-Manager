@@ -103,8 +103,9 @@ def saved_search_action(service, name, app, owner, action):
 
 # --- Otros objetos ---
 
-def list_macros(service):
-    return [{
+def macro_row(m):
+    """Resumen de una macro para los listados de la web."""
+    return {
         "name": m.name,
         **_acl(m),
         "definition": m.content.get("definition") or "",
@@ -112,7 +113,11 @@ def list_macros(service):
         "iseval": _flag(m.content.get("iseval")),
         "disabled": _flag(m.content.get("disabled")),
         "description": m.content.get("description") or "",
-    } for m in service.macros]
+    }
+
+
+def list_macros(service):
+    return [macro_row(m) for m in service.macros]
 
 
 def list_users(service):

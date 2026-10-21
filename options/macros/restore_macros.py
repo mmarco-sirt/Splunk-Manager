@@ -1,6 +1,7 @@
 import json
 
 from core.backup_files import choose_backup_file
+from options.macros.backup_macros import EXTRA_FIELDS
 
 BACKUP_FOLDER = "macros"
 
@@ -21,16 +22,18 @@ def restore_macros(service, file_path=None):
             macro_definition = macro["definition"]
             macro_args = macro.get("args", "")
             macro_sharing = "global"
+            # Backups nuevos: eval, estado, descripción y validación (los antiguos no los traen y no se tocan)
+            extra = {k: macro[k] for k in EXTRA_FIELDS if k in macro}
 
             print(f"Restaurando macro: {macro_name}")
 
             try:
                 if macro_name in existing_names:
                     existing_macro = service.macros[macro_name]
-                    existing_macro.update(definition=macro_definition, args=macro_args, sharing=macro_sharing)
+                    existing_macro.update(definition=macro_definition, args=macro_args, sharing=macro_sharing, **extra)
                     print(f"Macro '{macro_name}' actualizada correctamente.")
                 else:
-                    service.macros.create(name=macro_name, definition=macro_definition, args=macro_args, sharing=macro_sharing)
+                    service.macros.create(name=macro_name, definition=macro_definition, args=macro_args, sharing=macro_sharing, **extra)
                     existing_names.add(macro_name)
                     print(f"Macro '{macro_name}' creada correctamente.")
             except Exception as e:

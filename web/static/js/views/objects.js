@@ -1,12 +1,17 @@
 // Vistas de listado de objetos de Splunk: macros, dashboards, usuarios, roles, índices y apps.
-import { state, loadResource, cachedAt } from '../core.js';
+import { state, loadResource, cachedAt, navigate } from '../core.js';
 import {
   h, clear, button, badge, pageHeader, DataTable, openDrawer, kv, section, codeBlock, errorBox, loadingRows,
-  fmtNum, fmtMB, fmtRelative, fmtDate, withBusy,
+  fmtNum, fmtMB, fmtRelative, fmtDate, withBusy, confirmDialog, toast,
 } from '../ui.js';
 import { openRestoreModal, runBackup } from '../ops.js';
+import { mergeRows } from '../alert-editor.js';
+import { openMacroEditor, setMacrosEnabled } from '../macro-editor.js';
 
-/** Fábrica de vistas de listado con caché por cliente, botón de actualizar y tabla. */
+/**
+ * Fábrica de vistas de listado con caché por cliente, botón de actualizar y tabla.
+ * 'table' puede ser una función (ctx) => opciones, donde ctx.refresh() vuelve a pintar la tabla tras cambiar filas.
+ */
 function listView({ id, title, iconName, resource, subtitle, table: tableOpts, actions = () => [], prepare = (rows) => rows }) {
   return {
     id, title, icon: iconName, needsClient: true,
@@ -14,13 +19,14 @@ function listView({ id, title, iconName, resource, subtitle, table: tableOpts, a
       const body = h('div', {}, loadingRows(8));
       const stamp = h('span', { class: 'muted', style: { fontSize: '12.5px' } });
       let table = null;
+      const opts = typeof tableOpts === 'function' ? tableOpts({ refresh: () => table?.render() }) : tableOpts;
 
       const load = async (force = false) => {
         try {
           const rows = await prepare(await loadResource(resource, { force }), { force });
           stamp.textContent = `Datos ${fmtRelative(cachedAt(resource) / 1000)}`;
           if (!table) {
-            table = new DataTable({ emptyIcon: iconName, emptyTitle: `No hay ${title.toLowerCase()}`, initialQuery: params.q || '', ...tableOpts, rows });
+            table = new DataTable({ emptyIcon: iconName, emptyTitle: `No hay ${title.toLowerCase()}`, initialQuery: params.q || '', ...opts, rows });
             clear(body).append(table.el);
           } else {
             table.setRows(rows);
@@ -50,46 +56,131 @@ const restoreButton = (folder) => button('Restaurar…', { iconName: 'restore', 
 
 // --- Macros ------------------------------------------------------------------
 
-function macroDetail(m) {
-  openDrawer({
+const macroState = (m) => (m.disabled ? badge('Deshabilitada', 'outline') : badge('Habilitada', 'good', 'check'));
+
+/** Habilita o deshabilita (con backup previo); al deshabilitar avisa de que las búsquedas que la usan fallarán. */
+async function toggleMacros(rows, enabled, ctx) {
+  if (!enabled) {
+    const ok = await confirmDialog({
+      title: rows.length === 1 ? `¿Deshabilitar «${rows[0].name}»?` : `¿Deshabilitar ${fmtNum(rows.length)} macros?`,
+      message: `Mientras estén deshabilitadas, las búsquedas y alertas de ${state.client} que las usen fallarán. Antes se guarda su configuración en Backups.`,
+      confirmLabel: 'Deshabilitar', danger: true,
+    });
+    if (!ok) return false;
+  }
+  try {
+    mergeRows(rows, await setMacrosEnabled(rows, enabled));
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+  ctx.refresh();
+  return true;
+}
+
+function editMacro(m, ctx, { reopen = false } = {}) {
+  openMacroEditor(m, {
+    onSaved: (updated) => {
+      Object.assign(m, updated);
+      ctx.refresh();
+      if (reopen) macroDetail(m, ctx);
+    },
+  });
+}
+
+// Alertas, reportes y macros que la llaman (`nombre` o `nombre(...)`), con los listados de la caché
+async function macroUsage(m) {
+  const base = m.name.replace(/\(\d+\)$/, '');
+  const uses = (text) => String(text || '').includes(`\`${base}\``) || String(text || '').includes(`\`${base}(`);
+  const [searches, macros] = await Promise.all([loadResource('saved-searches'), loadResource('macros')]);
+  return {
+    searches: searches.filter((s) => uses(s.search)),
+    macros: macros.filter((other) => other.name !== m.name && uses(other.definition)),
+  };
+}
+
+function macroDetail(m, ctx) {
+  const editBtn = button('Editar', { iconName: 'edit', size: 'sm', variant: 'primary', onClick: () => editMacro(m, ctx, { reopen: true }) });
+  const toggleBtn = button(m.disabled ? 'Habilitar' : 'Deshabilitar', { iconName: 'power', size: 'sm' });
+  toggleBtn.addEventListener('click', () => withBusy(toggleBtn, async () => {
+    if (await toggleMacros([m], m.disabled, ctx)) drawer.close();
+  }));
+  const usage = h('div', {}, loadingRows(2));
+  const drawer = openDrawer({
     title: m.args ? `${m.name}(${m.args})` : m.name,
     subtitle: [m.app, m.owner, m.sharing].filter(Boolean).join(' · '),
+    actions: [editBtn, toggleBtn],
     body: [
-      h('div', { class: 'badges', style: { marginBottom: '16px' } },
-        m.disabled ? badge('Deshabilitada', 'outline') : badge('Habilitada', 'good', 'check'),
-        m.iseval ? badge('Expresión eval', 'accent') : null),
+      h('div', { class: 'badges', style: { marginBottom: '16px' } }, macroState(m), m.iseval ? badge('Expresión eval', 'accent') : null),
       section('Definición', codeBlock(m.definition)),
       section('Detalles', kv([['Argumentos', m.args || null], ['Descripción', m.description || null], ['App', m.app], ['Propietario', m.owner], ['Compartición', m.sharing]])),
+      section('Dónde se usa', usage),
     ],
   });
+  macroUsage(m).then(({ searches, macros }) => {
+    const link = (label, onClick) => h('li', {}, h('a', { href: '#', onclick: (e) => { e.preventDefault(); drawer.close(); onClick(); } }, label));
+    const total = searches.length + macros.length;
+    clear(usage).append(total
+      ? h('ul', { class: 'list-plain' },
+        searches.slice(0, 50).map((s) => link(`${s.name}${s.disabled ? ' (deshabilitada)' : ''}`, () => navigate(s.is_alert || s.is_es ? 'alerts' : 'reports', { q: s.name }))),
+        macros.slice(0, 50).map((other) => link(`Macro ${other.name}`, () => navigate('macros', { q: other.name }))),
+        total > 100 ? h('li', { class: 'muted' }, 'y más…') : null)
+      : h('p', { class: 'muted', style: { margin: 0 } }, 'Ninguna alerta, reporte ni macro de este cliente la usa (los dashboards no se revisan).'));
+  }).catch((e) => clear(usage).append(errorBox(e.message)));
 }
 
 export const macrosView = listView({
   id: 'macros', title: 'Macros', iconName: 'braces', resource: 'macros',
-  subtitle: () => `Macros de búsqueda de ${state.client}.`,
+  subtitle: () => `Macros de búsqueda de ${state.client}. Pulse una fila para ver su definición y dónde se usa, o edítela con el lápiz.`,
   actions: () => [restoreButton('macros'), backupButton('Backup de macros', 'macros')],
-  table: {
+  table: (ctx) => ({
     rowKey: (m) => `${m.app}/${m.owner}/${m.name}`,
     searchText: (m) => `${m.name} ${m.definition} ${m.app}`,
     searchPlaceholder: 'Buscar por nombre o definición…',
     initialSort: { key: 'name', dir: 'asc' },
-    onRowClick: macroDetail,
-    filters: [{
-      id: 'sharing',
-      options: [
-        { value: 'all', label: 'Todas' },
-        { value: 'global', label: 'Globales', test: (m) => m.sharing === 'global' },
-        { value: 'app', label: 'De app', test: (m) => m.sharing === 'app' },
-        { value: 'user', label: 'Privadas', test: (m) => m.sharing === 'user' },
-      ],
-    }],
+    selectable: true,
+    onRowClick: (m) => macroDetail(m, ctx),
+    selectionActions: [
+      { label: 'Habilitar', icon: 'power', onClick: (sel) => toggleMacros(sel, true, ctx) },
+      { label: 'Deshabilitar', icon: 'power', onClick: (sel) => toggleMacros(sel, false, ctx) },
+    ],
+    filters: [
+      {
+        id: 'sharing',
+        options: [
+          { value: 'all', label: 'Todas' },
+          { value: 'global', label: 'Globales', test: (m) => m.sharing === 'global' },
+          { value: 'app', label: 'De app', test: (m) => m.sharing === 'app' },
+          { value: 'user', label: 'Privadas', test: (m) => m.sharing === 'user' },
+        ],
+      },
+      {
+        id: 'state',
+        options: [
+          { value: 'all', label: 'Todas' },
+          { value: 'on', label: 'Habilitadas', test: (m) => !m.disabled },
+          { value: 'off', label: 'Deshabilitadas', test: (m) => m.disabled },
+        ],
+      },
+    ],
     columns: [
       { key: 'name', label: 'Nombre', render: (m) => h('div', {}, h('div', { class: 'cell-main' }, m.name), m.args ? h('div', { class: 'cell-sub' }, `(${m.args})`) : null) },
       { key: 'definition', label: 'Definición', render: (m) => h('div', { class: 'cell-code', title: m.definition }, m.definition) },
       { key: 'app', label: 'App' },
       { key: 'sharing', label: 'Compartición', render: (m) => badge(m.sharing || '—') },
+      { key: 'disabled', label: 'Estado', render: macroState, sort: (m) => (m.disabled ? 1 : 0) },
+      {
+        key: 'actions', label: '', className: 'col-actions', sortable: false,
+        render: (m) => {
+          const toggle = button('', { size: 'sm', variant: 'ghost', iconName: 'power', title: m.disabled ? 'Habilitar' : 'Deshabilitar' });
+          toggle.addEventListener('click', () => withBusy(toggle, () => toggleMacros([m], m.disabled, ctx)));
+          return h('div', { class: 'row-actions' },
+            button('', { size: 'sm', variant: 'ghost', iconName: 'edit', title: 'Editar', onClick: () => editMacro(m, ctx) }),
+            toggle,
+            button('', { size: 'sm', variant: 'ghost', iconName: 'eye', title: 'Ver detalle', onClick: () => macroDetail(m, ctx) }));
+        },
+      },
     ],
-  },
+  }),
 });
 
 // --- Dashboards --------------------------------------------------------------

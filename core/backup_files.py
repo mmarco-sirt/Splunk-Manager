@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import time
 
 from core.paths import backup_dir
@@ -10,6 +11,10 @@ MAX_VERSIONS = 30
 VERSION_FORMAT = "%Y%m%d-%H%M%S"
 # Campos que Splunk cambia solo (no son cambios reales de configuración)
 VOLATILE_FIELDS = {"next_scheduled_time", "triggered_alert_count"}
+# Backups con lo que había antes de cada edición (alertas, reportes, macros): <carpeta>_antes_de_editar_<host>_backup.json
+EDIT_LABEL = "antes_de_editar"
+
+_merge_lock = threading.Lock()
 
 
 def without_volatile(data):
@@ -84,6 +89,24 @@ def write_backup(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4)
     archive_version(path)
+
+
+def merge_backup(path, entries, key="name"):
+    """
+    Añade 'entries' al backup de 'path' (lista JSON), sustituyendo los elementos con el mismo 'key', y lo guarda con su
+    historial. Lo usan los backups «antes de editar», que van acumulando lo que había antes de cada cambio.
+    """
+    with _merge_lock:
+        existing = []
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+            except (OSError, ValueError):
+                existing = []
+        keys = {e.get(key) for e in entries}
+        kept = [e for e in existing if isinstance(e, dict) and e.get(key) not in keys] if isinstance(existing, list) else []
+        write_backup(path, kept + entries)
 
 
 def list_backup_files(folder, prefix=""):

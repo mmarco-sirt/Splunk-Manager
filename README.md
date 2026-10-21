@@ -82,7 +82,12 @@ Secciones:
   campo a campo qué cambia en cada cliente. Al aplicar se guarda antes la configuración de cada cliente en su archivo
   «antes_de_editar» y solo se modifica lo que no haya cambiado desde la vista previa. También sirve para habilitar o
   deshabilitar una alerta en todos los clientes.
-- **Macros, Dashboards, Usuarios, Roles**: listado, detalle, backup y restore.
+- **Macros**: listado con filtros, detalle con la definición y **dónde se usa** (alertas, reportes y otras macros),
+  **edición** (definición, argumentos, eval, descripción y validación, con revisión de cambios) y **habilitar o
+  deshabilitar** una o varias seleccionadas. Antes de cada cambio se guarda la configuración anterior en
+  `backups/macros/macros_antes_de_editar_<host>_backup.json` (con historial), así que se puede deshacer restaurándolo.
+  Los backups de macros incluyen también eval, estado y descripción, y el restore los aplica.
+- **Dashboards, Usuarios, Roles**: listado, detalle, backup y restore.
 - **Índices / Apps**: eventos, tamaño, retención y archivado (en Splunk Cloud, datos reales de los indexers),
   versiones y estado.
 - **Ingesta y licencia**: GB/día de los últimos 7, 30 o 90 días según `license_usage.log`, por índice y sourcetype,
