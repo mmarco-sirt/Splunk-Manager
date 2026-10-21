@@ -1,10 +1,15 @@
+import json
 import os
+import threading
 
 from core.backup_files import write_backup
 from core.paths import backup_dir, host_tag
 
 BACKUP_FOLDER = "alertas"
 TECNOLOGIAS = ["AD", "FW", "AV", "PX", "MAIL", "O365", "MI"]
+EDIT_LABEL = "antes_de_editar"
+
+_edit_backup_lock = threading.Lock()
 
 
 def _is_alert(saved_search):
@@ -52,16 +57,47 @@ def backup_alerts_custom(service, custom):
     _backup_cu_alerts(service, custom, custom)
 
 
+def backup_entry(saved_search):
+    """Elemento de backup de una saved search (los casos de uso de Enterprise Security incluyen 'app')."""
+    entry = {"name": saved_search.name, "content": saved_search.content}
+    if _is_es_use_case(saved_search):
+        entry["app"] = saved_search.access.get('app')
+    return entry
+
+
+def backup_before_edit(service, saved_searches):
+    """
+    Guarda la configuración actual de esas saved searches en backups/<alertas|reportes>/<carpeta>_antes_de_editar_<host>_backup.json
+    (con historial), sustituyendo las entradas anteriores con el mismo nombre. Así cualquier cambio (edición, habilitar o
+    deshabilitar...) se puede deshacer restaurando ese archivo. Devuelve las rutas de los archivos escritos.
+    """
+    by_folder = {}
+    for s in saved_searches:
+        folder = BACKUP_FOLDER if (_is_alert(s) or _is_es_use_case(s)) else "reportes"
+        by_folder.setdefault(folder, []).append(backup_entry(s))
+
+    paths = []
+    with _edit_backup_lock:
+        for folder, entries in by_folder.items():
+            path = os.path.join(backup_dir(folder), f"{folder}_{EDIT_LABEL}_{host_tag(service)}_backup.json")
+            existing = []
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        existing = json.load(f)
+                except (OSError, ValueError):
+                    existing = []
+            names = {e["name"] for e in entries}
+            data = [e for e in existing if isinstance(e, dict) and e.get("name") not in names] + entries
+            write_backup(path, data)
+            paths.append(path)
+    return paths
+
+
 def backup_alerts_by_name(service, names, file_label="seleccion"):
     """Backup de las saved searches con esos nombres exactos (las de Enterprise Security incluyen 'app')."""
     wanted = set(names)
-    entries = []
-    for s in service.saved_searches:
-        if s.name in wanted:
-            entry = {"name": s.name, "content": s.content}
-            if _is_es_use_case(s):
-                entry["app"] = s.access.get('app')
-            entries.append(entry)
+    entries = [backup_entry(s) for s in service.saved_searches if s.name in wanted]
 
     missing = wanted - {e["name"] for e in entries}
     if missing:

@@ -243,7 +243,7 @@ def migrate_config():
 
 
 def migrate_config_cli():
-    """Ejecuta migrate_config() mostrando el resultado por consola (CLI y aplicación de escritorio)."""
+    """Ejecuta migrate_config() mostrando el resultado por consola (CLI)."""
     try:
         for message in migrate_config():
             print(message)

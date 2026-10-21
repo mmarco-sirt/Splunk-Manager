@@ -378,6 +378,35 @@ export async function openEditor(row, { onSaved } = {}) {
   showEditor();
 }
 
+// --- Habilitar / deshabilitar ------------------------------------------------------------
+
+/** Copia en 'rows' los datos actualizados (mismo nombre, app y propietario). */
+export function mergeRows(rows, updated) {
+  for (const u of updated) {
+    const row = rows.find((r) => r.name === u.name && r.app === u.app && r.owner === u.owner);
+    if (row) Object.assign(row, u);
+  }
+}
+
+/**
+ * Habilita o deshabilita una o varias saved searches del cliente activo en una sola petición. Antes se guarda su
+ * configuración en Backups («antes_de_editar»). Devuelve las filas actualizadas.
+ */
+export async function setEnabled(rows, enabled) {
+  const result = await post('/api/splunk/saved-searches/bulk-update', {
+    client: state.client, items: rows.map((r) => ({ name: r.name, app: r.app, owner: r.owner })), changes: { disabled: enabled ? '0' : '1' },
+  });
+  const done = enabled ? 'habilitada' : 'deshabilitada';
+  if (rows.length === 1 && result.updated) toast(`«${rows[0].name}» ${done}`, 'success');
+  else if (result.updated) toast(`${fmtNum(result.updated)} ${done}s · configuración anterior guardada en Backups`, 'success');
+  if (result.unchanged && !result.updated) toast(rows.length === 1 ? `Ya estaba ${done}` : `Ya estaban ${done}s`, 'info');
+  if (result.failed) {
+    const failed = result.results.filter((r) => !r.ok);
+    toast(`No se pudieron cambiar ${failed.length}: ${failed.slice(0, 3).map((r) => `${r.name}: ${r.error}`).join(' · ')}`, 'error');
+  }
+  return result.results.filter((r) => r.ok).map((r) => r.row);
+}
+
 // --- Cambios en bloque ---------------------------------------------------------------
 
 export function openBulkEditor(rows, { onSaved } = {}) {

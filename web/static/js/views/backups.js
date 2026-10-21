@@ -303,7 +303,7 @@ export default {
     clear(root).append(
       pageHeader({
         title: 'Backups',
-        subtitle: 'Archivos guardados en la carpeta backups/ del servidor. Los mismos que usan el CLI y la aplicación de escritorio.',
+        subtitle: 'Archivos guardados en la carpeta backups/ del servidor. Los mismos que usa el CLI.',
         actions: [refreshBtn, importBtn],
       }),
       tabs, body);

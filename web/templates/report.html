@@ -34,6 +34,7 @@
   table { width: 100%; border-collapse: collapse; font-size: 8.8pt; margin: 4px 0 6px; }
   th { text-align: left; font-weight: 600; color: var(--text-2); background: var(--surface-2); border-bottom: 1px solid var(--border); padding: 5px 6px; }
   td { border-bottom: 1px solid var(--border); padding: 4px 6px; vertical-align: top; }
+  table + table { margin-top: 14px; }
   tr { break-inside: avoid; }
   thead { display: table-header-group; }
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -86,6 +87,7 @@
         {{ clients|length }} {{ 'cliente' if clients|length == 1 else 'clientes' }}
         {% if 'ingest' in sections %} · ingesta de los últimos {{ report.days }} días{% endif %}
         {% if 'health' in sections %} · fuente sin datos: más de {{ report.threshold }} h{% endif %}
+        {% if 'alert_analysis' in sections %} · alertas ruidosas: {{ NOISY_PER_DAY }} o más disparos al día de media o en casi todas sus ejecuciones{% endif %}
       </div>
     </div>
     <div class="spacer"></div>
@@ -113,6 +115,7 @@
         <th>Cliente</th><th>Versión</th>
         {% if 'health' in sections %}<th>Estado</th><th>Diagnóstico</th><th class="num">Alertas activas</th><th class="num">Planificador 24 h</th><th class="num">Ingesta 24 h</th><th class="num">Sin datos</th>{% endif %}
         {% if 'ingest' in sections %}<th class="num">Media/día ({{ report.days }} d)</th>{% endif %}
+        {% if 'alert_analysis' in sections %}<th class="num">Alertas ruidosas</th><th class="num">Alertas muertas</th>{% endif %}
       </tr></thead>
       <tbody>
       {% for c in clients %}{% set s = summaries[c.name] %}
@@ -128,6 +131,9 @@
           <td class="num">{{ s.silent|length if c.health and c.health.checks and c.health.checks.sources.ok else '—' }}</td>
           {% endif %}
           {% if 'ingest' in sections %}<td class="num">{{ s.avg_day|bytes if s.avg_day is not none else '—' }}</td>{% endif %}
+          {% if 'alert_analysis' in sections %}{% set aa = c.alert_analysis %}
+          <td class="num">{{ aa.summary.noisy|num if aa else '—' }}</td><td class="num">{{ aa.summary.dead|num if aa else '—' }}</td>
+          {% endif %}
         </tr>
       {% endfor %}
       </tbody>
@@ -213,6 +219,43 @@
           <td class="num">{{ r.severity or '—' }}</td>
         </tr>{% endfor %}</tbody>
       </table>
+    {% endif %}
+
+    {% if c.alert_analysis %}{% set aa = c.alert_analysis %}
+      <h3>Análisis de alertas (últimos {{ aa.period_days }} días)</h3>
+      <div class="tiles four">
+        <div class="tile"><div class="label">Disparos</div><div class="value">{{ aa.summary.fired|num }}</div>
+          <div class="sub">{{ aa.summary.fired_avg_day|num(1) }} al día · {{ aa.summary.active|num }} alertas activas</div></div>
+        <div class="tile"><div class="label">Ruidosas</div><div class="value">{{ aa.summary.noisy|num }}</div><div class="sub">las que más disparan</div></div>
+        <div class="tile"><div class="label">Muertas</div><div class="value">{{ aa.summary.dead|num }}</div><div class="sub">nunca disparan o no se ejecutan</div></div>
+        <div class="tile"><div class="label">Planificador</div><div class="value">{{ aa.summary.scheduler|num }}</div>
+          <div class="sub">{{ aa.summary.skipped|num }} saltadas · {{ aa.summary.errors|num }} con error</div></div>
+      </div>
+      {% if aa.noisy %}
+      <table>
+        <thead><tr><th>Alerta ruidosa</th><th>Motivo</th><th class="num">Disparos</th><th class="num">Resultados</th><th>Tendencia</th><th>Supresión</th></tr></thead>
+        <tbody>{% for a in aa.noisy[:15] %}<tr><td class="wrap">{{ a.name }}</td><td>{{ a.reason }}</td><td class="num">{{ a.stats.fired|num }}</td>
+          <td class="num">{{ a.stats.results|num }}</td><td class="nowrap">{{ a.trend or '—' }}</td><td>{{ 'Sí' if a.suppress else 'No' }}</td></tr>{% endfor %}</tbody>
+      </table>
+      {% if aa.noisy|length > 15 %}<p class="muted">Y {{ aa.noisy|length - 15 }} más (ver el informe Excel).</p>{% endif %}
+      {% endif %}
+      {% if aa.dead %}
+      <table>
+        <thead><tr><th>Alerta muerta</th><th>Motivo</th><th>Programación</th><th class="num">Ejecuciones</th><th class="num">Saltadas</th></tr></thead>
+        <tbody>{% for a in aa.dead[:25] %}<tr><td class="wrap">{{ a.name }}</td><td>{{ a.reason }}</td>
+          <td>{% if a.cron %}<code>{{ a.cron }}</code>{% else %}<span class="muted">No programada</span>{% endif %}</td>
+          <td class="num">{{ a.stats.runs|num }}</td><td class="num">{{ a.stats.skipped|num }}</td></tr>{% endfor %}</tbody>
+      </table>
+      {% if aa.dead|length > 25 %}<p class="muted">Y {{ aa.dead|length - 25 }} más (ver el informe Excel).</p>{% endif %}
+      {% endif %}
+      {% if aa.scheduler %}
+      <table>
+        <thead><tr><th>Problemas del planificador</th><th>Detalle</th><th class="num">Ejecutadas</th><th class="num">Saltadas</th><th class="num">Errores</th></tr></thead>
+        <tbody>{% for a in aa.scheduler[:15] %}<tr><td class="wrap">{{ a.name }}</td><td class="wrap">{{ a.reason }}</td><td class="num">{{ a.stats.runs|num }}</td>
+          <td class="num">{{ a.stats.skipped|num }}</td><td class="num">{{ a.stats.errors|num }}</td></tr>{% endfor %}</tbody>
+      </table>
+      {% endif %}
+      {% if not aa.noisy and not aa.dead and not aa.scheduler %}<p>Ninguna alerta ruidosa, muerta ni con problemas de planificador.</p>{% endif %}
     {% endif %}
 
     {% if c.indexes %}

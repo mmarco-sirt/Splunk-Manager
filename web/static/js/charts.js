@@ -3,14 +3,19 @@ import { h, attachTooltip, fmtBytes } from './ui.js';
 
 const UNIT = 1024;
 
-/** Escala "bonita" para el eje Y: devuelve los valores de las marcas (0 incluido). */
-function niceTicks(max, count = 4) {
+/**
+ * Escala "bonita" para el eje Y: devuelve los valores de las marcas (0 incluido).
+ * base: 1024 para bytes (marcas en KB, MB...) o 1 para recuentos; integer: solo marcas enteras.
+ */
+function niceTicks(max, count = 4, { base = UNIT, integer = false } = {}) {
   if (max <= 0) return [0, 1];
   let unit = 1;
-  while (max / unit >= UNIT) unit *= UNIT;
+  while (base > 1 && max / unit >= base) unit *= base;
   const raw = max / unit / count;
   const magnitude = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((s) => s >= raw) * unit;
+  const factors = integer ? [1, 2, 5, 10] : [1, 2, 2.5, 5, 10];
+  let step = factors.map((m) => m * magnitude).find((s) => s >= raw) * unit;
+  if (integer) step = Math.max(1, Math.round(step));
   const ticks = [];
   for (let v = 0; v <= max + step * 0.001; v += step) ticks.push(v);
   if (ticks[ticks.length - 1] < max) ticks.push(ticks[ticks.length - 1] + step);
@@ -19,11 +24,11 @@ function niceTicks(max, count = 4) {
 
 /**
  * Columnas de una sola serie (p. ej. GB por día) con rejilla, línea de media y tooltip por barra.
- * points: [{ label, value, partial }]
+ * points: [{ label, value, partial }]. Para recuentos (no bytes) use counts: true.
  */
-export function columnChart(points, { format = fmtBytes, tooltipLabel = (p) => p.label, average, height = 220, xLabel = (p) => p.label } = {}) {
+export function columnChart(points, { format = fmtBytes, tooltipLabel = (p) => p.label, average, height = 220, xLabel = (p) => p.label, counts = false } = {}) {
   const max = Math.max(...points.map((p) => p.value), average || 0, 1);
-  const ticks = niceTicks(max);
+  const ticks = niceTicks(max, 4, counts ? { base: 1, integer: true } : {});
   const top = ticks[ticks.length - 1];
   const pct = (v) => `${(v / top) * 100}%`;
 

@@ -5,7 +5,7 @@ a = Analysis(
     ['main_cli.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('web/templates', 'web/templates')],   # plantilla de los informes (--informe)
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

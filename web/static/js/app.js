@@ -16,15 +16,17 @@ import backups from './views/backups.js';
 import batch from './views/batch.js';
 import clients from './views/clients.js';
 import compare from './views/compare.js';
+import multiEdit from './views/multi-edit.js';
+import alertAnalysis from './views/alert-analysis.js';
 import reports from './views/reports.js';
 import activity, { openJobDrawer } from './views/activity.js';
 
 const NAV = [
   { title: 'General', items: [overview, health, search] },
-  { title: 'Objetos', items: [alertsView, reportsView, macrosView, dashboardsView] },
+  { title: 'Objetos', items: [alertsView, alertAnalysis, reportsView, macrosView, dashboardsView] },
   { title: 'Acceso', items: [usersView, rolesView] },
   { title: 'Plataforma', items: [indexesView, ingest, appsView] },
-  { title: 'Gestión', items: [compare, reports, backups, batch, clients, activity] },
+  { title: 'Gestión', items: [compare, multiEdit, reports, backups, batch, clients, activity] },
 ];
 const VIEWS = new Map(NAV.flatMap((g) => g.items).map((v) => [v.id, v]));
 
@@ -269,7 +271,7 @@ async function init() {
   on('jobs', renderTasksButton);
   on('open-job', (id) => openJobDrawer(id));
   on('job-finished', (job) => {
-    if (job.kind === 'backup' || job.kind === 'copy') invalidateBackups();
+    if (job.kind === 'backup' || job.kind === 'copy' || job.kind === 'edit') invalidateBackups();
     if (currentView().id === 'backups') scheduleRender();
   });
   on('route', () => renderRoute({ scroll: true }));

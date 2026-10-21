@@ -1271,3 +1271,36 @@ table.data.compact th { padding: 7px 10px; }
   .cron-row { flex-direction: column; }
   .cron-row .select { max-width: none !important; }
 }
+
+/* --- Análisis de alertas ------------------------------------------------------- */
+
+.trend-cell { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.detail-section .cell-sub { font-size: 12px; color: var(--text-3); margin-top: 1px; }
+.help-list { font-size: 13px; color: var(--text-2); gap: 6px; padding-left: 2px; }
+.help-list li { padding-left: 12px; border-left: 2px solid var(--border); }
+
+/* --- Edición en varios clientes ------------------------------------------------ */
+
+.medit-add { display: flex; gap: 8px; max-width: 560px; }
+.medit-add .input { flex: 1; }
+.client-chip .btn-icon { width: 20px; height: 20px; min-height: 0; padding: 0; margin: -2px -4px -2px 0; }
+.medit-found { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.medit-found + .medit-found { margin-top: 4px; }
+.medit-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.medit-line { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 10px; display: grid; gap: 10px; }
+.medit-line-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.medit-line-head > .select { width: auto; min-width: 220px; max-width: 100%; }
+.medit-line-head > .input { width: 240px; max-width: 100%; }
+.medit-line .field { margin-bottom: 0; }
+details.compare-block > summary { cursor: pointer; list-style: none; }
+details.compare-block > summary::-webkit-details-marker { display: none; }
+details.compare-block > summary .compare-block-head { margin-bottom: 0; }
+details.compare-block[open] > summary .compare-block-head { margin-bottom: 8px; }
+.medit-quiet { padding-top: 8px; padding-bottom: 8px; }
+.medit-quiet .compare-block-head { margin-bottom: 0; }
+.medit-quiet p { margin-top: 6px !important; }
+.medit-apply { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
+@media (max-width: 700px) {
+  .medit-add { flex-direction: column; }
+  .medit-line-head > .select, .medit-line-head > .input { min-width: 0; width: 100%; }
+}

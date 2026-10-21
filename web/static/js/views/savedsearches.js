@@ -6,7 +6,7 @@ import {
   codeBlock, errorBox, loadingRows, fmtRelative, withBusy, fmtNum,
 } from '../ui.js';
 import { openBackupModal, openRestoreModal, runBackup } from '../ops.js';
-import { openEditor, openBulkEditor } from '../alert-editor.js';
+import { openEditor, openBulkEditor, setEnabled, mergeRows } from '../alert-editor.js';
 
 const SEVERITY = { 1: ['Debug', ''], 2: ['Info', ''], 3: ['Baja', 'accent'], 4: ['Media', 'warn'], 5: ['Alta', 'bad'], 6: ['Crítica', 'bad'] };
 
@@ -35,21 +35,19 @@ async function dispatchNow(row) {
   });
 }
 
-async function setEnabled(rows, enabled, onDone) {
-  let ok = 0;
-  const failed = [];
-  for (const row of rows) {
-    try {
-      await action(row, enabled ? 'enable' : 'disable');
-      row.disabled = !enabled;
-      ok++;
-    } catch (e) {
-      failed.push(`${row.name}: ${e.message}`);
-    }
+// Habilita o deshabilita en una sola petición (con backup previo) y actualiza las filas
+async function toggleRows(rows, enabled, refreshTable) {
+  try {
+    mergeRows(rows, await setEnabled(rows, enabled));
+  } catch (e) {
+    toast(e.message, 'error');
   }
-  onDone();
-  if (ok) toast(`${fmtNum(ok)} ${enabled ? 'habilitadas' : 'deshabilitadas'}`, 'success');
-  if (failed.length) toast(`No se pudieron cambiar ${failed.length}: ${failed.slice(0, 3).join(' · ')}`, 'error');
+  refreshTable();
+}
+
+/** Abre la edición en varios clientes con esas saved searches. */
+export function editInClients(rows) {
+  navigate('multi-edit', { names: JSON.stringify([...new Set(rows.map((r) => r.name))]) });
 }
 
 function backupSelection(rows) {
@@ -76,7 +74,7 @@ function backupSelection(rows) {
 function openDetail(row, refreshTable, { isAlertView }) {
   const toggleBtn = button(row.disabled ? 'Habilitar' : 'Deshabilitar', { iconName: 'power', size: 'sm' });
   toggleBtn.addEventListener('click', () => withBusy(toggleBtn, async () => {
-    await setEnabled([row], row.disabled, refreshTable);
+    await toggleRows([row], row.disabled, refreshTable);
     drawer.close();
   }));
   const runBtn = button('Ejecutar ahora', { iconName: 'play', size: 'sm' });
@@ -90,6 +88,7 @@ function openDetail(row, refreshTable, { isAlertView }) {
     runBtn,
     button('Abrir en Búsqueda', { iconName: 'search', size: 'sm', onClick: () => { drawer.close(); navigate('search', { q: row.search }); } }),
     toggleBtn,
+    button('En varios clientes…', { iconName: 'layers', size: 'sm', onClick: () => { drawer.close(); editInClients([row]); } }),
   ];
   if (isAlertView) {
     actions.push(button('Backup', { iconName: 'download', size: 'sm', onClick: () => runBackup('alerts_selected', { names: [row.name], label: 'seleccion' }) }));
@@ -134,10 +133,7 @@ function editRow(row, refreshTable, { isAlertView, reopen = false } = {}) {
 function bulkEdit(rows, allRows, refreshTable) {
   openBulkEditor(rows, {
     onSaved: (updated) => {
-      for (const u of updated) {
-        const row = allRows().find((r) => r.name === u.name && r.app === u.app && r.owner === u.owner);
-        if (row) Object.assign(row, u);
-      }
+      mergeRows(allRows(), updated);
       refreshTable();
     },
   });
@@ -174,8 +170,9 @@ function makeView({ id, title, iconName, subtitle, rowFilter, filters, isAlertVi
               onRowClick: (r) => openDetail(r, refreshTable, { isAlertView }),
               selectionActions: [
                 { label: 'Modificar…', icon: 'sliders', variant: 'primary', onClick: (sel) => bulkEdit(sel, () => rows, refreshTable) },
+                { label: 'En varios clientes…', icon: 'layers', onClick: (sel) => editInClients(sel) },
                 isAlertView && { label: 'Backup de la selección', icon: 'download', onClick: (sel) => backupSelection(sel) },
-                { label: 'Habilitar', icon: 'power', onClick: (sel) => setEnabled(sel, true, refreshTable) },
+                { label: 'Habilitar', icon: 'power', onClick: (sel) => toggleRows(sel, true, refreshTable) },
                 {
                   label: 'Deshabilitar', icon: 'power',
                   onClick: async (sel) => {
@@ -184,7 +181,7 @@ function makeView({ id, title, iconName, subtitle, rowFilter, filters, isAlertVi
                       message: `Dejarán de ejecutarse en ${state.client} hasta que se vuelvan a habilitar.`,
                       confirmLabel: 'Deshabilitar', danger: true,
                     });
-                    if (ok) await setEnabled(sel, false, refreshTable);
+                    if (ok) await toggleRows(sel, false, refreshTable);
                   },
                 },
               ].filter(Boolean),
@@ -205,7 +202,7 @@ function makeView({ id, title, iconName, subtitle, rowFilter, filters, isAlertVi
                     const run = button('', { size: 'sm', variant: 'ghost', iconName: 'play', title: 'Ejecutar ahora' });
                     run.addEventListener('click', () => withBusy(run, () => dispatchNow(r).catch((e) => toast(e.message, 'error'))));
                     const toggle = button('', { size: 'sm', variant: 'ghost', iconName: 'power', title: r.disabled ? 'Habilitar' : 'Deshabilitar' });
-                    toggle.addEventListener('click', () => withBusy(toggle, () => setEnabled([r], r.disabled, refreshTable)));
+                    toggle.addEventListener('click', () => withBusy(toggle, () => toggleRows([r], r.disabled, refreshTable)));
                     const edit = button('', { size: 'sm', variant: 'ghost', iconName: 'edit', title: 'Editar' });
                     edit.addEventListener('click', () => editRow(r, refreshTable, { isAlertView }));
                     return h('div', { class: 'row-actions' }, edit, run, toggle,

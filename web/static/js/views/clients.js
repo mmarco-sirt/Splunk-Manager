@@ -220,7 +220,7 @@ export default {
     clear(root).append(
       pageHeader({
         title: 'Clientes',
-        subtitle: 'Plataformas Splunk configuradas en config.py, con usuario/contraseña, token o ambos (cifrados). Los cambios también los ven el CLI y la aplicación de escritorio.',
+        subtitle: 'Plataformas Splunk configuradas en config.py, con usuario/contraseña, token o ambos (cifrados). Los cambios también los ve el CLI.',
         actions: [button('Nuevo cliente', { variant: 'primary', iconName: 'plus', onClick: () => openClientModal(null) })],
       }),
       table.el);

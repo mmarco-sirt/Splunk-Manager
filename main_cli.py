@@ -1,9 +1,20 @@
+"""
+Splunk Manager por consola.
+
+Sin argumentos abre el menú interactivo. Con argumentos se ejecuta sin preguntar nada, para programarlo con el
+Programador de tareas de Windows (ver options/batch/non_interactive.py y python main_cli.py --help), p. ej.:
+    python main_cli.py --backup alertas macros --clientes todos
+    python main_cli.py --informe --clientes todos --dias 7
+"""
+import sys
+
 from core.clients import ensure_config_exists, get_clients_from_config, manage_clients_cli, migrate_config_cli
 from core.connection import select_client, connect_to_splunk
 from core.paths import backup_dir
 from options.alerts.backup_alerts import TECNOLOGIAS, backup_alerts, backup_alerts_especific, backup_alerts_custom, backup_es_use_cases, backup_es_use_cases_custom
 from options.alerts.restore_alerts import restore_alerts
 from options.alerts.list_alerts import list_active_cases
+from options.alerts.toggle_alerts import toggle_alerts_cli
 from options.macros.backup_macros import backup_macros
 from options.macros.restore_macros import restore_macros
 from options.users.backup_users import backup_users
@@ -30,7 +41,33 @@ def get_multiple_clients_selection(all_clients):
         print("Error: Selección de clientes inválida.")
         return []
 
-def main():
+def alert_analysis_cli(service):
+    """Muestra las alertas ruidosas, muertas y con problemas de planificador del cliente."""
+    from web.alert_analysis import ANALYSIS_DAYS, analyze_alerts, report_lists
+    choice = input(f"Periodo en días ({'/'.join(map(str, ANALYSIS_DAYS))}) [7]: ").strip() or "7"
+    if not choice.isdigit() or int(choice) not in ANALYSIS_DAYS:
+        print("Periodo no válido.")
+        return
+    print("Analizando el log del planificador (puede tardar un poco)...")
+    try:
+        result = analyze_alerts(service, int(choice))
+    except Exception as e:
+        print(f"❌ Error en el análisis de alertas: {e}")
+        return
+    summary, lists = result["summary"], report_lists(result)
+    print(f"\n{summary['active']} alertas activas · {summary['fired']} disparos ({summary['fired_avg_day']:.1f} al día) · "
+          f"{summary['skipped']} ejecuciones saltadas · {summary['errors']} con error")
+    for title, key in (("Ruidosas", "noisy"), ("Muertas", "dead"), ("Problemas del planificador", "scheduler")):
+        items = lists[key]
+        print(f"\n{title} ({len(items)}):")
+        for item in items[:20]:
+            trend = f" · tendencia: {item['trend']}" if key == "noisy" and item["trend"] else ""
+            print(f"  - {item['name']}: {item['reason']}{trend}")
+        if len(items) > 20:
+            print(f"  ... y {len(items) - 20} más (el informe Excel las incluye todas)")
+
+
+def interactive():
     backup_dir()  # Asegurar que la carpeta 'backups/' existe
     ensure_config_exists()
     migrate_config_cli()  # Cifra las credenciales que sigan en claro en config.py
@@ -71,6 +108,8 @@ def main():
         print("16) Restore Roles")
         print("17) Gestionar Clientes (Añadir/Modificar)")
         print("18) Multi Alert Restore Same Client")
+        print("19) Habilitar / Deshabilitar alertas")
+        print("20) Análisis de alertas (ruidosas, muertas, planificador)")
         print("0) Exit")
 
         choice = input("Ingrese una opción: ")
@@ -145,11 +184,23 @@ def main():
             print("\nVolviendo al menú principal. Lista de clientes recargada.")
         elif choice == "18":
             batch_restore_multiple_alerts_same_client(service)
+        elif choice == "19":
+            toggle_alerts_cli(service)
+        elif choice == "20":
+            alert_analysis_cli(service)
         elif choice == "0":
             print("Saliendo...")
             break
         else:
             print("Opción no válida, intente nuevamente.")
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv:
+        from options.batch.non_interactive import main as run_non_interactive
+        sys.exit(run_non_interactive(argv))
+    interactive()
+
 
 if __name__ == "__main__":
     main()

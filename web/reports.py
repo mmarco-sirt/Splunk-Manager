@@ -1,5 +1,5 @@
 """
-Informes exportables de uno o varios clientes: salud, ingesta, inventario de alertas, índices y usuarios.
+Informes exportables de uno o varios clientes: salud, ingesta, inventario y análisis de alertas, índices y usuarios.
 
 Formatos: Excel (.xlsx), HTML (para ver o imprimir) y PDF (el mismo HTML impreso con Microsoft Edge o Chrome en
 modo headless, si están instalados). Se guardan en la carpeta informes/.
@@ -19,6 +19,7 @@ from markupsafe import Markup
 
 from core.paths import REPORTS_ROOT, reports_dir
 from web import services
+from web.alert_analysis import NOISY_PER_DAY, analyze_alerts, period_for, report_lists
 from web.explorer import INGEST_DAYS, ingest_usage, list_indexes, list_roles, list_saved_searches, list_users
 from web.health import LEVEL_LABELS, RANK, check_client, evaluate, monitor
 from web.operations import OperationError
@@ -29,6 +30,7 @@ SECTIONS = {
     "health": "Salud: conexión, planificador, ingesta de 24 h y fuentes sin datos",
     "ingest": "Ingesta diaria por índice y sourcetype",
     "alerts": "Inventario de alertas",
+    "alert_analysis": "Análisis de alertas: ruidosas, muertas y problemas del planificador",
     "indexes": "Índices",
     "users": "Usuarios y roles",
 }
@@ -137,6 +139,7 @@ def collect_client(name, sections, days, threshold, ignored):
         "ingest": lambda: ingest_usage(service, days),
         "alerts": lambda: sorted((r for r in list_saved_searches(service) if r["is_alert"] or r["is_es"]),
                                  key=lambda r: r["name"].lower()),
+        "alert_analysis": lambda: _alert_analysis(service, days),
         "indexes": lambda: list_indexes(service),
         "users": lambda: {"users": list_users(service), "roles": list_roles(service)},
     }
@@ -147,6 +150,12 @@ def collect_client(name, sections, days, threshold, ignored):
             except Exception as e:
                 data["errors"][key] = f"{type(e).__name__}: {e}"
     return data
+
+
+def _alert_analysis(service, days):
+    """Análisis de alertas para el informe (como mucho 30 días: lo que suele guardar _internal)."""
+    result = analyze_alerts(service, period_for(days))
+    return {"period_days": result["period_days"], "summary": result["summary"], **report_lists(result)}
 
 
 def _client_summary(c, threshold):
@@ -184,6 +193,10 @@ def write_excel(path, report):
                     ("Cambio vs media 7 d", "percent"), (f"Fuentes sin datos > {threshold} h", "int")]
     if has_ingest:
         columns += [(f"Media diaria {report['days']} d (GB)", "decimal"), ("Día pico", "text"), ("Pico (GB)", "decimal")]
+    has_analysis = "alert_analysis" in sections
+    if has_analysis:
+        columns += [("Disparos de alertas", "int"), ("Alertas ruidosas", "int"), ("Alertas muertas", "int"),
+                    ("Alertas con problemas de planificador", "int")]
     columns += [("Error", "wrap")]
 
     rows = []
@@ -200,6 +213,9 @@ def write_excel(path, report):
         if has_ingest:
             row += [s["avg_day"] / GB if s["avg_day"] is not None else None,
                     s["peak"]["day"] if s["peak"] else None, s["peak"]["bytes"] / GB if s["peak"] else None]
+        if has_analysis:
+            summary = (c.get("alert_analysis") or {}).get("summary") or {}
+            row += [summary.get("fired"), summary.get("noisy"), summary.get("dead"), summary.get("scheduler")]
         row += ["\n".join([c["error"] or ""] + [f"{k}: {v}" for k, v in c["errors"].items()]).strip() or None]
         rows.append(row)
     sheets = [Sheet("Resumen", columns, rows)]
@@ -246,6 +262,32 @@ def write_excel(path, report):
                               _alert_kind(r), r["cron"] if r["scheduled"] else "No programada", r["severity"], r["actions"],
                               r["es_label"], r["description"]]
                              for c in clients for r in c.get("alerts") or []]))
+
+    if has_analysis:
+        analyzed = [c for c in clients if c.get("alert_analysis")]
+        trend_change = lambda st: st["trend"]["change"] if st.get("trend") and st["trend"]["change"] is not None else None
+        sheets.append(Sheet("Alertas ruidosas",
+                            [("Cliente", "text"), ("Alerta", "text"), ("App", "text"), ("Motivo", "text"), ("Disparos", "int"),
+                             ("Media diaria", "decimal"), ("Resultados", "int"), ("Ejecuciones con disparo", "percent"),
+                             ("Tendencia", "percent"), ("Supresión", "text"), ("Severidad", "text")],
+                            [[c["name"], a["name"], a["app"], a["reason"], a["stats"]["fired"], a["stats"]["fired_per_day"],
+                              a["stats"]["results"], a["stats"]["fire_rate"], trend_change(a["stats"]),
+                              "Sí" if a["suppress"] else "No", a["severity"]]
+                             for c in analyzed for a in c["alert_analysis"]["noisy"]]))
+        sheets.append(Sheet("Alertas muertas",
+                            [("Cliente", "text"), ("Alerta", "text"), ("App", "text"), ("Motivo", "text"), ("Programación", "text"),
+                             ("Ejecuciones", "int"), ("Esperadas", "int"), ("Saltadas", "int"), ("Con error", "int")],
+                            [[c["name"], a["name"], a["app"], a["reason"], a["cron"] or "No programada", a["stats"]["runs"],
+                              a["stats"]["expected"], a["stats"]["skipped"], a["stats"]["errors"]]
+                             for c in analyzed for a in c["alert_analysis"]["dead"]]))
+        sheets.append(Sheet("Alertas y planificador",
+                            [("Cliente", "text"), ("Alerta", "text"), ("App", "text"), ("Problema", "wrap"), ("Ejecutadas", "int"),
+                             ("Saltadas", "int"), ("Con error", "int"), ("Esperadas", "int"), ("Motivo del salto", "wrap"),
+                             ("Duración media (s)", "decimal")],
+                            [[c["name"], a["name"], a["app"], a["reason"], a["stats"]["runs"], a["stats"]["skipped"],
+                              a["stats"]["errors"], a["stats"]["expected"], "\n".join(a["stats"]["skip_reasons"]),
+                              a["stats"]["avg_runtime"]]
+                             for c in analyzed for a in c["alert_analysis"]["scheduler"]]))
 
     if "indexes" in sections:
         sheets.append(Sheet("Índices",
@@ -319,7 +361,8 @@ def _environment():
     env = Environment(loader=FileSystemLoader(TEMPLATES), autoescape=select_autoescape(["html"]),
                       undefined=ChainableUndefined)
     env.filters.update(num=fmt_num, bytes=fmt_bytes, pct=fmt_pct, time=fmt_time, change=fmt_change, day=fmt_day)
-    env.globals.update(LEVEL_LABELS=LEVEL_LABELS, columns_svg=columns_svg, alert_kind=_alert_kind, epoch=_epoch)
+    env.globals.update(LEVEL_LABELS=LEVEL_LABELS, columns_svg=columns_svg, alert_kind=_alert_kind, epoch=_epoch,
+                       NOISY_PER_DAY=NOISY_PER_DAY)
     return env
 
 

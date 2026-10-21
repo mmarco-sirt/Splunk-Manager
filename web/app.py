@@ -9,7 +9,7 @@ from werkzeug.exceptions import HTTPException
 from core.clients import ensure_config_exists, migrate_config
 from core.paths import backup_dir
 from options.alerts.backup_alerts import TECNOLOGIAS
-from web import alert_editor, compare, explorer, operations, reports, services
+from web import alert_analysis, alert_editor, compare, explorer, multi_edit, operations, reports, services
 from web.health import monitor as health_monitor
 from web.jobs import install_output_router, jobs
 from web.operations import BACKUP_FOLDERS, OperationError
@@ -113,6 +113,7 @@ def create_app(password=None, restrict_host=True):
             compare_types=compare.types_meta(),
             report_sections=reports.SECTIONS,
             report_formats=reports.formats(),
+            analysis_days=list(alert_analysis.ANALYSIS_DAYS),
         )
 
     # --- Clientes ---
@@ -188,6 +189,11 @@ def create_app(password=None, restrict_host=True):
         service = services.get_service(client_param())
         return jsonify(explorer.ingest_usage(service, int(request.args.get("days", 30))))
 
+    @app.get("/api/alert-analysis")
+    def alert_analysis_get():
+        service = services.get_service(client_param())
+        return jsonify(alert_analysis.analyze_alerts(service, int(request.args.get("days", 7))))
+
     # --- Salud de todos los clientes ---
 
     @app.get("/api/health")
@@ -253,6 +259,26 @@ def create_app(password=None, restrict_host=True):
         title, action = operations.build_restore(data.get("folder"), data.get("files") or [], data.get("options") or {})
         job = jobs.start(f"{title} · {clients_suffix(clients)}", "restore", clients,
                          operations.run_for_clients(clients, action))
+        return jsonify(job.summary()), 202
+
+    # --- Edición de alertas en varios clientes ---
+
+    @app.post("/api/multi-edit/lookup")
+    def multi_edit_lookup():
+        data = body()
+        return jsonify(multi_edit.lookup(data.get("names"), target_clients(data)))
+
+    @app.post("/api/multi-edit/preview")
+    def multi_edit_preview():
+        data = body()
+        return jsonify(multi_edit.preview(data.get("names"), target_clients(data), data.get("ops")))
+
+    @app.post("/api/multi-edit/apply")
+    def multi_edit_apply():
+        data = body()
+        title, clients, action = multi_edit.build_apply(data.get("names"), data.get("ops"), data.get("targets"))
+        target_clients({"clients": clients})
+        job = jobs.start(title, "edit", clients, action)
         return jsonify(job.summary()), 202
 
     @app.post("/api/compare")

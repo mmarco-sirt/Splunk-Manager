@@ -55,7 +55,7 @@ function diffLines(lines) {
 }
 
 /** Diferencias de campos: 'before' es la referencia y 'after' el otro cliente. */
-function fieldDiffs(fields, reference, target) {
+export function fieldDiffs(fields, reference, target) {
   return h('div', { class: 'diff-fields' },
     h('div', { class: 'diff-legend' }, h('span', { class: 'diff-old' }, reference), h('span', { class: 'arrow' }, '→'), h('span', { class: 'diff-new' }, target)),
     fields.map((f) => h('div', {},

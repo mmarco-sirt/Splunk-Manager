@@ -17,3 +17,6 @@ informes/
 # Artefactos de PyInstaller
 build/
 dist/
+
+# Logs del modo no interactivo del CLI
+logs/

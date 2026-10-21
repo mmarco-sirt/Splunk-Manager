@@ -167,7 +167,7 @@ export async function refreshJobs() {
 }
 
 function onJobFinished(job) {
-  if (job.kind === 'restore' || job.kind === 'copy') {
+  if (job.kind === 'restore' || job.kind === 'copy' || job.kind === 'edit') {
     for (const client of job.clients) invalidate(client, RESTORE_RESOURCES[job.folder] || null);
   }
   emit('job-finished', job);
