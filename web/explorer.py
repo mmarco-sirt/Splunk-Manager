@@ -263,6 +263,20 @@ INGEST_SPL = (
     'search index=_internal source=*license_usage.log* type=Usage earliest=-{offset}d@d '
     '| bin _time span=1d | stats sum(b) as bytes by _time idx st'
 )
+# Entitlements de la suscripción de Splunk Cloud: la misma búsqueda que el panel License Usage > Entitlement de la
+# Cloud Monitoring Console, con sus macros (por eso se lanza en el contexto de su app; requiere sc_admin).
+# Todos los valores vienen en GB; vacío o 0 es N/A (p. ej. sin DDAA, o licencia por SVC en lugar de por ingesta).
+CMC_APP = "splunk_instance_monitoring"
+ENTITLEMENTS_EARLIEST = "-30d"
+_LOCAL_STACK = '[`sim_get_local_stack` | eval host="*.".stack.".*splunk*" | fields host]'
+ENTITLEMENTS_SPL = (
+    f'search `sim_set_index_cmc_summary` source="splunk-entitlements" {_LOCAL_STACK} '
+    '| stats latest(ingest_license) as ingest '
+    f'| appendcols [search `sim_set_index_cmc_summary` source="splunk-storage-summary" {_LOCAL_STACK} '
+    '| stats latest(activeStorageLicenseGB) as ddas latest(activeArchiveLicenseGB) as ddaa '
+    'latest(DDAARestoreLimitGB) as restore]'
+)
+GB = 1024 ** 3
 
 
 def _usage_summary(series_by_name, extra=None):
@@ -284,6 +298,27 @@ def _usage_summary(series_by_name, extra=None):
     return sorted(rows, key=lambda r: r["total"], reverse=True)
 
 
+def cloud_entitlements(service):
+    """
+    Entitlements de Splunk Cloud en GB: ingest (licencia diaria), ddas, ddaa y restore (None si no aplica).
+    Si no se pueden leer, 'error' lleva el motivo y el resto va a None.
+    """
+    keys = ("ingest", "ddas", "ddaa", "restore")
+    try:
+        results = oneshot_results(service, ENTITLEMENTS_SPL, app=CMC_APP, owner="nobody",
+                                  earliest_time=ENTITLEMENTS_EARLIEST)
+    except HTTPError as e:
+        error = ("La cuenta no tiene acceso a la Cloud Monitoring Console (hace falta el rol sc_admin)."
+                 if e.status in (403, 404) else f"Splunk respondió HTTP {e.status} {e.reason}.")
+        return {**dict.fromkeys(keys), "error": error}
+    except Exception as e:
+        return {**dict.fromkeys(keys), "error": f"{type(e).__name__}: {e}"}
+    row = results[0] if results else {}
+    values = {key: _number(row.get(key)) or None for key in keys}
+    error = None if any(values.values()) else "La Cloud Monitoring Console no tiene entitlements registrados."
+    return {**values, "error": error}
+
+
 def ingest_usage(service, days=30):
     """Ingesta diaria (bytes de licencia) por índice y sourcetype de los últimos 'days' días, hoy incluido."""
     if days not in INGEST_DAYS:
@@ -292,11 +327,16 @@ def ingest_usage(service, days=30):
     day_keys = [(today - timedelta(days=offset)).isoformat() for offset in range(days - 1, -1, -1)]
     position = {day: i for i, day in enumerate(day_keys)}
 
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        usage_job = pool.submit(oneshot_results, service, INGEST_SPL.format(offset=days - 1))
+        entitlements_job = pool.submit(cloud_entitlements, service)
+        usage, entitlements = usage_job.result(), entitlements_job.result()
+
     totals = [0] * days
     by_index = defaultdict(lambda: [0] * days)
     by_sourcetype = defaultdict(lambda: [0] * days)
     sourcetype_indexes = defaultdict(set)
-    for row in oneshot_results(service, INGEST_SPL.format(offset=days - 1)):
+    for row in usage:
         i = position.get(str(row.get("_time", ""))[:10])
         if i is None:
             continue
@@ -308,13 +348,16 @@ def ingest_usage(service, days=30):
         sourcetype_indexes[sourcetype].add(index)
 
     complete = totals[:-1]
-    peak = max(range(len(complete)), key=lambda i: complete[i]) if complete else None
+    quota = entitlements["ingest"] * GB if entitlements["ingest"] else None
+    peak =max(range(len(complete)), key=lambda i: complete[i]) if complete else None
     return {
         "days": day_keys,
         "totals": totals,
         "total": sum(totals),
         "avg_day": sum(complete) / len(complete) if complete else 0,
         "peak": {"day": day_keys[peak], "bytes": complete[peak]} if peak is not None else None,
+        # Entitlements y días completos del periodo por encima de la licencia de ingesta
+        "license": {**entitlements, "over_days": sum(1 for b in complete if b > quota) if quota else None},
         "indexes": _usage_summary(by_index),
         "sourcetypes": _usage_summary(by_sourcetype, lambda st: {"indexes": sorted(sourcetype_indexes[st])}),
     }

@@ -91,7 +91,9 @@ Secciones:
 - **Índices / Apps**: eventos, tamaño, retención y archivado (en Splunk Cloud, datos reales de los indexers),
   versiones y estado.
 - **Ingesta y licencia**: GB/día de los últimos 7, 30 o 90 días según `license_usage.log`, por índice y sourcetype,
-  con su tendencia.
+  con su tendencia. Muestra también los entitlements de la suscripción de Splunk Cloud (licencia de ingesta, DDAS,
+  DDAA y restauración DDAA, con la misma búsqueda que la Cloud Monitoring Console; requiere el rol `sc_admin`), el % de
+  uso de la licencia y los días que la superan. Los informes incluyen los mismos datos.
 - **Backups**: archivos por tipo, visor del contenido, descarga, importación de JSON, borrado y restore
   (también de solo algunos elementos de un archivo), y **historial de versiones** con comparación y restore de
   una versión anterior.

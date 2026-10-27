@@ -114,7 +114,7 @@
       <thead><tr>
         <th>Cliente</th><th>Versión</th>
         {% if 'health' in sections %}<th>Estado</th><th>Diagnóstico</th><th class="num">Alertas activas</th><th class="num">Planificador 24 h</th><th class="num">Ingesta 24 h</th><th class="num">Sin datos</th>{% endif %}
-        {% if 'ingest' in sections %}<th class="num">Media/día ({{ report.days }} d)</th>{% endif %}
+        {% if 'ingest' in sections %}<th class="num">Media/día ({{ report.days }} d)</th><th class="num">Licencia/día</th>{% endif %}
         {% if 'alert_analysis' in sections %}<th class="num">Alertas ruidosas</th><th class="num">Alertas muertas</th>{% endif %}
       </tr></thead>
       <tbody>
@@ -130,7 +130,8 @@
           <td class="num">{% if s.ingest24 %}{{ s.ingest24.last24h_bytes|bytes }} <span class="{{ 'delta-down' if (s.ingest24.change or 0) < -0.5 else 'delta-up' if (s.ingest24.change or 0) > 1 else 'muted' }}">{{ s.ingest24.change|change }}</span>{% else %}—{% endif %}</td>
           <td class="num">{{ s.silent|length if c.health and c.health.checks and c.health.checks.sources.ok else '—' }}</td>
           {% endif %}
-          {% if 'ingest' in sections %}<td class="num">{{ s.avg_day|bytes if s.avg_day is not none else '—' }}</td>{% endif %}
+          {% if 'ingest' in sections %}<td class="num">{{ s.avg_day|bytes if s.avg_day is not none else '—' }}</td>
+          <td class="num">{% if s.license.ingest %}{{ s.license.ingest|gb }}<div class="muted">media al {{ s.license_use|pct }}</div>{% elif s.license and not s.license.error %}N/A{% else %}—{% endif %}</td>{% endif %}
           {% if 'alert_analysis' in sections %}{% set aa = c.alert_analysis %}
           <td class="num">{{ aa.summary.noisy|num if aa else '—' }}</td><td class="num">{{ aa.summary.dead|num if aa else '—' }}</td>
           {% endif %}
@@ -188,6 +189,18 @@
     {% if c.ingest %}
       <h3>Ingesta de los últimos {{ report.days }} días</h3>
       <p>Media diaria <strong>{{ c.ingest.avg_day|bytes }}</strong> · total del periodo {{ c.ingest.total|bytes }}{% if c.ingest.peak %} · pico {{ c.ingest.peak.bytes|bytes }} el {{ c.ingest.peak.day|day }}{% endif %}</p>
+      {% set lic = c.ingest.license %}
+      {% if lic and lic.error %}
+      <p class="muted">Entitlements de la Cloud Monitoring Console no disponibles: {{ lic.error }}</p>
+      {% elif lic %}
+      {% if lic.ingest %}
+      <p>Licencia de ingesta <strong>{{ lic.ingest|gb }}/día</strong> · media al {{ (c.ingest.avg_day / (lic.ingest * GB))|pct }}{% if c.ingest.peak %} · pico al {{ (c.ingest.peak.bytes / (lic.ingest * GB))|pct }}{% endif %} ·
+        {% if lic.over_days %}<span class="delta-down"><strong>{{ lic.over_days|num }} {{ 'día' if lic.over_days == 1 else 'días' }} por encima de la licencia</strong></span>{% else %}ningún día por encima de la licencia{% endif %}</p>
+      {% else %}
+      <p>Licencia de ingesta: N/A (la suscripción no es por ingesta).</p>
+      {% endif %}
+      <p>Entitlements de almacenamiento: DDAS {{ lic.ddas|gb }} · DDAA {{ lic.ddaa|gb }} · restauración DDAA {{ lic.restore|gb }}</p>
+      {% endif %}
       {{ columns_svg(c.ingest.days, c.ingest.totals) }}
       <p class="muted">La última columna (más clara) es el día en curso. La línea discontinua es la media de los días completos.</p>
       <div class="two">

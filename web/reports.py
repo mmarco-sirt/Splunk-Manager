@@ -87,6 +87,11 @@ def fmt_bytes(value):
     return f"{fmt_num(value, 1 if i else 0)} {units[i]}"
 
 
+def fmt_gb(value):
+    """Entitlement en GB como en la Cloud Monitoring Console; None es N/A."""
+    return "N/A" if not value else f"{fmt_num(value, 0 if value == int(value) else 1)} GB"
+
+
 def fmt_pct(value):
     return "—" if value is None else f"{fmt_num(value * 100, 0)} %"
 
@@ -165,6 +170,8 @@ def _client_summary(c, threshold):
     alerts, scheduler, ingest = data("alerts"), data("scheduler"), data("ingest")
     diagnosis = c.get("diagnosis") or {}
     period = c.get("ingest")
+    entitlements = (period or {}).get("license") or {}
+    quota = entitlements["ingest"] * GB if entitlements.get("ingest") else None
     return {
         "level": diagnosis.get("level") or ("critical" if c.get("error") else "pending"),
         "problems": diagnosis.get("problems") or ([{"level": "critical", "text": c["error"]}] if c.get("error") else []),
@@ -174,6 +181,8 @@ def _client_summary(c, threshold):
         "alerts": alerts, "scheduler": scheduler, "ingest24": ingest,
         "avg_day": period["avg_day"] if period else None,
         "peak": period["peak"] if period else None,
+        "license": entitlements,
+        "license_use": period["avg_day"] / quota if quota else None,
     }
 
 
@@ -192,7 +201,10 @@ def write_excel(path, report):
                     ("Saltadas 24 h", "int"), ("Con error 24 h", "int"), ("Ingesta 24 h (GB)", "decimal"),
                     ("Cambio vs media 7 d", "percent"), (f"Fuentes sin datos > {threshold} h", "int")]
     if has_ingest:
-        columns += [(f"Media diaria {report['days']} d (GB)", "decimal"), ("Día pico", "text"), ("Pico (GB)", "decimal")]
+        columns += [(f"Media diaria {report['days']} d (GB)", "decimal"), ("Día pico", "text"), ("Pico (GB)", "decimal"),
+                    ("Licencia de ingesta (GB/día)", "decimal"), ("Uso medio de licencia", "percent"),
+                    ("Días por encima de licencia", "int"), ("Almacenamiento DDAS (GB)", "decimal"),
+                    ("Archivo DDAA (GB)", "decimal"), ("Restauración DDAA (GB)", "decimal")]
     has_analysis = "alert_analysis" in sections
     if has_analysis:
         columns += [("Disparos de alertas", "int"), ("Alertas ruidosas", "int"), ("Alertas muertas", "int"),
@@ -213,6 +225,8 @@ def write_excel(path, report):
         if has_ingest:
             row += [s["avg_day"] / GB if s["avg_day"] is not None else None,
                     s["peak"]["day"] if s["peak"] else None, s["peak"]["bytes"] / GB if s["peak"] else None]
+            lic = s["license"]
+            row += [lic.get("ingest"), s["license_use"], lic.get("over_days"), lic.get("ddas"), lic.get("ddaa"), lic.get("restore")]
         if has_analysis:
             summary = (c.get("alert_analysis") or {}).get("summary") or {}
             row += [summary.get("fired"), summary.get("noisy"), summary.get("dead"), summary.get("scheduler")]
@@ -360,9 +374,9 @@ def columns_svg(days, values, width=680, height=150):
 def _environment():
     env = Environment(loader=FileSystemLoader(TEMPLATES), autoescape=select_autoescape(["html"]),
                       undefined=ChainableUndefined)
-    env.filters.update(num=fmt_num, bytes=fmt_bytes, pct=fmt_pct, time=fmt_time, change=fmt_change, day=fmt_day)
+    env.filters.update(num=fmt_num, bytes=fmt_bytes, pct=fmt_pct, time=fmt_time, change=fmt_change, day=fmt_day, gb=fmt_gb)
     env.globals.update(LEVEL_LABELS=LEVEL_LABELS, columns_svg=columns_svg, alert_kind=_alert_kind, epoch=_epoch,
-                       NOISY_PER_DAY=NOISY_PER_DAY)
+                       NOISY_PER_DAY=NOISY_PER_DAY, GB=GB)
     return env
 
 

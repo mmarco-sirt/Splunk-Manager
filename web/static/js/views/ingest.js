@@ -33,6 +33,37 @@ function tile(label, iconName, value, meta) {
   return h('div', { class: 'tile' }, h('div', { class: 'tile-label' }, icon(iconName), label), h('div', { class: 'tile-value' }, value), h('div', { class: 'tile-meta' }, meta || ' '));
 }
 
+// Entitlements de Splunk Cloud (en GB, como en la Cloud Monitoring Console); null = N/A
+const fmtGB = (gb) => (gb ? `${fmtNum(gb)} GB` : 'N/A');
+
+function kvInline(label, value) {
+  return h('div', { class: 'kv-inline' }, h('span', {}, label), h('span', {}, value));
+}
+
+function entitlementsBanner(license) {
+  const title = h('div', { class: 'server-name' }, h('div', {},
+    h('h2', {}, 'Entitlements'), h('div', { class: 'muted' }, 'Suscripción de Splunk Cloud, según la Cloud Monitoring Console')));
+  if (license.error) {
+    return h('div', { class: 'server-banner' }, title, h('div', { class: 'muted' }, `No disponibles: ${license.error}`));
+  }
+  return h('div', { class: 'server-banner' }, title,
+    kvInline('Licencia de ingesta', license.ingest ? `${fmtGB(license.ingest)}/día` : 'N/A'),
+    kvInline('Almacenamiento (DDAS)', fmtGB(license.ddas)),
+    kvInline('Archivo (DDAA)', fmtGB(license.ddaa)),
+    kvInline('Restauración DDAA', fmtGB(license.restore)));
+}
+
+function licenseTile(license, avgDay) {
+  if (!license.ingest) {
+    return tile('Uso de licencia', 'key', '—', license.error ? 'Entitlements no disponibles' : 'La suscripción no es por ingesta');
+  }
+  const over = license.over_days;
+  return tile('Uso de licencia', 'key', fmtPct(avgDay / (license.ingest * 1024 ** 3)), [
+    `media sobre ${fmtGB(license.ingest)}/día`,
+    over ? h('span', { class: 'delta delta-serious' }, ` · ${fmtNum(over)} ${over === 1 ? 'día' : 'días'} por encima`) : null,
+  ]);
+}
+
 function usageTable(rows, total, { kind }) {
   return new DataTable({
     rows,
@@ -101,7 +132,8 @@ export default {
 
     function render(data) {
       const lastComplete = data.totals.length > 1 ? data.totals[data.totals.length - 2] : 0;
-      const tiles = h('div', { class: 'tiles' },
+      const tiles = h('div', { class: 'tiles tiles-5' },
+        licenseTile(data.license, data.avg_day),
         tile('Media diaria', 'barChart', fmtBytes(data.avg_day), `últimos ${days - 1} días completos`),
         tile('Último día completo', 'clock', fmtBytes(lastComplete),
           [dayLabel(data.days[data.days.length - 2] || data.days[0], { weekday: 'long', day: 'numeric', month: 'short' }), ' · ', delta(lastComplete, data.avg_day)]),
@@ -142,7 +174,7 @@ export default {
       renderTabs();
       renderTable();
 
-      clear(body).append(tiles, chart, h('section', { class: 'card', style: { marginTop: '16px' } },
+      clear(body).append(entitlementsBanner(data.license), tiles, chart, h('section', { class: 'card', style: { marginTop: '16px' } },
         h('div', { class: 'card-header' }, h('div', {},
           h('h2', { class: 'card-title' }, 'Reparto del volumen'),
           h('p', { class: 'card-subtitle' }, 'La media y la tendencia no incluyen el día en curso'))),
