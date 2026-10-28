@@ -4,6 +4,11 @@ Ejecución de tareas en segundo plano para la interfaz web.
 Las funciones de options/ informan de su progreso con print(). Aquí se redirige
 sys.stdout/sys.stderr de forma que lo que imprime cada hilo de tarea acaba en el
 log de esa tarea, mientras el resto de hilos siguen escribiendo en la consola.
+
+Una tarea lanzada con cancellable=True se puede cancelar desde la web: la función de la
+tarea consulta cancel_requested() entre pasos y termina cuando se lo piden. Con
+set_progress() indica por dónde va (n de m) y en 'meta' puede dejar datos para la web
+(p. ej. el resultado que ha guardado).
 """
 import builtins
 import os
@@ -118,8 +123,26 @@ def _snapshot_files():
     return snapshot
 
 
+def current_job():
+    """Tarea que se está ejecutando en este hilo, o None."""
+    return getattr(_local, "job", None)
+
+
+def set_progress(done, total, label=""):
+    """Progreso de la tarea en curso (n de m y qué está haciendo)."""
+    job = current_job()
+    if job is not None:
+        job.progress = {"done": done, "total": total, "label": label}
+
+
+def cancel_requested():
+    """True si se ha pedido cancelar la tarea en curso."""
+    job = current_job()
+    return bool(job and job.cancel_requested)
+
+
 class Job:
-    def __init__(self, title, kind, clients):
+    def __init__(self, title, kind, clients, cancellable=False, meta=None):
         self.id = uuid.uuid4().hex[:12]
         self.title = title
         self.kind = kind
@@ -131,6 +154,10 @@ class Job:
         self.errors = 0
         self.warnings = 0
         self.files = []
+        self.cancellable = cancellable
+        self.cancel_requested = False
+        self.progress = None
+        self.meta = dict(meta or {})
         self._partial = ""
         self._lock = threading.Lock()
 
@@ -155,7 +182,9 @@ class Job:
                 self._add_line(self._partial)
                 self._partial = ""
             self.finished = time.time()
-            if status == "success" and self.errors:
+            if status == "success" and self.cancel_requested:
+                status = "cancelled"
+            elif status == "success" and self.errors:
                 status = "partial"
             self.status = status
 
@@ -172,6 +201,10 @@ class Job:
             "warnings": self.warnings,
             "files": self.files,
             "line_count": len(self.lines),
+            "cancellable": self.cancellable and self.status == "running" and not self.cancel_requested,
+            "cancel_requested": self.cancel_requested,
+            "progress": self.progress,
+            "meta": self.meta,
         }
 
     def detail(self, since=0):
@@ -187,15 +220,16 @@ class JobManager:
         self._jobs = {}
         self._lock = threading.Lock()
 
-    def start(self, title, kind, clients, target):
+    def start(self, title, kind, clients, target, cancellable=False, meta=None):
         """Lanza 'target()' en un hilo; todo lo que imprima queda en el log de la tarea."""
-        job = Job(title, kind, clients)
+        job = Job(title, kind, clients, cancellable, meta)
         with self._lock:
             self._jobs[job.id] = job
             self._trim()
 
         def runner():
             _local.sink = job.write
+            _local.job = job
             before = _snapshot_files()
             status = "success"
             try:
@@ -208,6 +242,7 @@ class JobManager:
                 after = _snapshot_files()
                 job.files = sorted(p for p, mtime in after.items() if before.get(p) != mtime)
                 _local.sink = None
+                _local.job = None
                 job.finish(status)
 
         threading.Thread(target=runner, name=f"job-{job.id}", daemon=True).start()
@@ -222,6 +257,14 @@ class JobManager:
 
     def get(self, job_id):
         return self._jobs.get(job_id)
+
+    def cancel(self, job_id):
+        """Pide cancelar una tarea en curso que lo admite. Devuelve False si no se puede."""
+        job = self._jobs.get(job_id)
+        if not job or job.status != "running" or not job.cancellable:
+            return False
+        job.cancel_requested = True
+        return True
 
     def list(self):
         with self._lock:

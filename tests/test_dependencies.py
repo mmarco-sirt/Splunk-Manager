@@ -92,6 +92,11 @@ class TestLookups(unittest.TestCase):
         self.assertEqual(result["global.csv"]["kind"], "file")
         self.assertEqual(result["con_csv"]["commands"], ["lookup"])
 
+    def test_outputlookup_creates_the_lookup(self):
+        result = resolve_dependencies("| inputlookup a.csv | outputlookup nuevo.csv | outputlookup a.csv", SIRT, [], [csv("a.csv")])
+        self.assertEqual({lk["name"]: lk["status"] for lk in result["lookups"]}, {"a.csv": "ok", "nuevo.csv": "created"})
+        self.assertEqual(result["problems"], 0)
+
     def test_direct_use_is_reported_before_use_inside_macros(self):
         result = resolve_dependencies("| inputlookup x.csv | `m`", SIRT, [macro("m", "lookup x.csv a")], [csv("x.csv")])
         self.assertEqual([(lk["name"], lk["via"]) for lk in result["lookups"]], [("x.csv", None)])

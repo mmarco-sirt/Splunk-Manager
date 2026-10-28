@@ -14,7 +14,7 @@ from core.spl import lookup_refs, macro_calls
 MAX_DEPTH = 25
 # ok: se usa y funciona · disabled: existe pero está deshabilitado · not_visible: existe, pero solo en otras apps o
 # privado de otro usuario · missing: no existe · file_missing / file_not_visible: definición de lookup cuyo archivo CSV
-# no existe o no se ve
+# no existe o no se ve · created: lookup que no existe pero la búsqueda solo escribe en él (outputlookup lo crea)
 PROBLEMS = ("disabled", "not_visible", "missing", "file_missing", "file_not_visible")
 
 
@@ -81,7 +81,7 @@ def resolve_dependencies(spl, context, macros, lookups=()):
         chosen, _ = resolve(candidates, context)
         item = {"name": ref["name"], "commands": ref["commands"], "via": via}
         if chosen is None:
-            item["status"] = "not_visible" if candidates else "missing"
+            item["status"] = "created" if ref["commands"] == ["outputlookup"] else "not_visible" if candidates else "missing"
             item["not_visible_in"] = [_where(o) for o in candidates]
         else:
             item.update(_where(chosen), kind=chosen.get("kind"), type=chosen.get("type"), filename=chosen.get("filename"))

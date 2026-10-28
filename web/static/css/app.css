@@ -549,6 +549,20 @@ a.tile:hover { border-color: var(--border-strong); }
 .dep-branch { color: var(--text-3); }
 .dep-item .cell-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; word-break: break-word; }
 .lookup-preview { max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+
+/* Validar app */
+.val-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; }
+.val-toolbar .field label { display: block; margin-bottom: 6px; }
+.val-diff-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 18px 0 12px; }
+.run-form { max-width: 980px; }
+.run-list { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow: auto; margin-top: 10px; padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 10px; }
+.run-item { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+.run-name { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1; min-width: 0; word-break: break-word; }
+.run-window { font-size: 12px; white-space: nowrap; }
+.run-fixed { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; }
+.run-fixed[hidden] { display: none; }
+.run-options { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .lookup-preview table.data th { position: sticky; top: 0; background: var(--surface-2, var(--surface)); }
 
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex: none; }
@@ -926,6 +940,8 @@ table.data.compact th { padding: 7px 10px; }
 .console-empty { color: var(--console-muted); }
 
 .job-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-bottom: 14px; font-size: 13px; color: var(--text-2); }
+.job-progress { display: flex; align-items: center; gap: 8px; width: 100%; max-width: 420px; font-size: 12px; margin-top: 4px; }
+.job-progress .meter { flex: 1; }
 .job-files { margin-top: 16px; }
 .file-link { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12.5px; }
 .file-link .icon { width: 14px; height: 14px; }
@@ -955,7 +971,8 @@ table.data.compact th { padding: 7px 10px; }
 
 /* --- Pestañas ----------------------------------------------------------- */
 
-.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 16px; overflow-x: auto; }
+/* La línea inferior es una sombra interior: con un borde, el -1px de las pestañas desbordaba y salía una barra de scroll */
+.tabs { display: flex; gap: 2px; box-shadow: inset 0 -1px 0 var(--border); margin-bottom: 16px; overflow-x: auto; overflow-y: hidden; }
 .tab {
   display: inline-flex;
   align-items: center;
@@ -968,7 +985,6 @@ table.data.compact th { padding: 7px 10px; }
   font-weight: 540;
   cursor: pointer;
   white-space: nowrap;
-  margin-bottom: -1px;
 }
 .tab:hover { color: var(--text); }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); }

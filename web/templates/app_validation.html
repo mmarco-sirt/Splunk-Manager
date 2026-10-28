@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ report.title }} · {{ report.generated.strftime('%d/%m/%Y %H:%M') }}</title>
+<style>
+  :root {
+    --text: #17171a; --text-2: #52514e; --text-3: #85847e; --border: #e4e3dd; --surface-2: #f6f6f3;
+    --accent: #2a78d6; --good: #006300; --good-soft: #e5f4e5; --warn: #7f5300; --warn-soft: #fdf3da;
+    --bad: #ad2727; --bad-soft: #fbe8e8;
+  }
+  @page { size: A4; margin: 14mm 12mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { margin: 0; background: #fff; color: var(--text); font: 10pt/1.45 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; }
+  .page { max-width: 1040px; margin: 0 auto; padding: 28px 28px 40px; }
+  h1 { font-size: 22pt; margin: 4px 0 6px; letter-spacing: -0.01em; }
+  h3 { font-size: 11pt; margin: 22px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+  p { margin: 0 0 8px; }
+  .muted { color: var(--text-3); }
+  .eyebrow { color: var(--accent); font-weight: 650; font-size: 9pt; letter-spacing: .06em; text-transform: uppercase; }
+  .cover { border-bottom: 2px solid var(--text); padding-bottom: 14px; margin-bottom: 18px; display: flex; gap: 16px; align-items: flex-end; }
+  .cover .meta { color: var(--text-2); }
+  .cover .spacer { flex: 1; }
+  .print-btn { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 10px 0 4px; }
+  .tile { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; break-inside: avoid; }
+  .tile .label { color: var(--text-2); font-size: 8.5pt; }
+  .tile .value { font-size: 15pt; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .tile .sub { color: var(--text-3); font-size: 8.5pt; }
+  table { width: 100%; border-collapse: collapse; font-size: 8.8pt; margin: 4px 0 6px; }
+  th { text-align: left; font-weight: 600; color: var(--text-2); background: var(--surface-2); border-bottom: 1px solid var(--border); padding: 5px 6px; }
+  td { border-bottom: 1px solid var(--border); padding: 4px 6px; vertical-align: top; }
+  tr { break-inside: avoid; }
+  thead { display: table-header-group; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .nowrap { white-space: nowrap; }
+  .wrap { word-break: break-word; white-space: pre-wrap; }
+  code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 8.5pt; }
+  .level { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 8.5pt; font-weight: 600; white-space: nowrap; }
+  .level-error, .level-bad { background: var(--bad-soft); color: var(--bad); }
+  .level-warning, .level-warn { background: var(--warn-soft); color: var(--warn); }
+  .level-info, .level-muted { background: var(--surface-2); color: var(--text-2); }
+  .level-good { background: var(--good-soft); color: var(--good); }
+  .note { background: var(--surface-2); padding: 8px 10px; border-radius: 8px; margin: 8px 0; color: var(--text-2); }
+  .footer { margin-top: 28px; color: var(--text-3); font-size: 8.5pt; border-top: 1px solid var(--border); padding-top: 8px; }
+  @media print {
+    .no-print { display: none !important; }
+    .page { padding: 0; max-width: none; }
+  }
+  @media (max-width: 700px) {
+    .page { padding: 16px; }
+    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cover { flex-wrap: wrap; }
+    .table-wrap { overflow-x: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  {% set app = report.app %}
+  <div class="cover">
+    <div>
+      <div class="eyebrow">Validación de app</div>
+      <h1>{{ app.label or app.id }} {{ app.version }}</h1>
+      <div class="meta">
+        <code>{{ app.id }}</code>{% if app.build %} · build {{ app.build }}{% endif %}
+        · {{ report.meta.filename }} ({{ report.meta.size | bytes }}) · subido el {{ report.meta.uploaded | time }}
+      </div>
+      <div class="meta muted">SHA-256 {{ report.meta.sha256 }} · informe del {{ report.generated.strftime('%d/%m/%Y %H:%M') }}</div>
+    </div>
+    <div class="spacer"></div>
+    {% if not report.pdf %}<button class="print-btn no-print" onclick="window.print()">Imprimir / PDF</button>{% endif %}
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><div class="label">Errores</div><div class="value">{{ report.counts.error | num }}</div><div class="sub">hay que corregirlos</div></div>
+    <div class="tile"><div class="label">Avisos</div><div class="value">{{ report.counts.warning | num }}</div><div class="sub">conviene revisarlos</div></div>
+    <div class="tile"><div class="label">Cambios</div><div class="value">{{ report.diff['items'] | length if report.diff else '—' }}</div>
+      <div class="sub">{{ report.base_label or 'sin comparar' }}</div></div>
+    <div class="tile"><div class="label">Búsquedas ejecutadas</div><div class="value">{{ report.run.results | length if report.run else '—' }}</div>
+      <div class="sub">{% if report.run %}en {{ report.run.client }}{% else %}sin ejecutar{% endif %}</div></div>
+  </div>
+  {% if report.check %}
+  <p class="muted">Incluye la validación en <b>{{ report.check.client }}</b> del {{ report.check.created | time }}
+    {% if report.check.installed %}(versión instalada {{ report.check.installed.version or '—' }}){% else %}(la app no está instalada){% endif %}.</p>
+  {% else %}
+  <p class="muted">Sin validación contra un cliente: no se ha comprobado que las macros y lookups externos existan ni el SPL con el parser de Splunk.</p>
+  {% endif %}
+
+  <h3>Validación ({{ report.issues | length }})</h3>
+  {% if report.issues %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Nivel</th><th>Origen</th><th>Categoría</th><th>Objeto / archivo</th><th>Problema</th></tr></thead>
+    <tbody>
+    {% for i in report.issues %}
+      <tr>
+        <td><span class="level level-{{ i.level }}">{{ LEVELS[i.level] }}</span></td>
+        <td class="nowrap">{{ i.source }}</td>
+        <td class="nowrap">{{ CATEGORIES.get(i.category, i.category) }}</td>
+        <td class="wrap">{% if i.object %}<b>{{ i.object }}</b><br>{% endif %}<span class="muted">{{ i.file }}{% if i.line %}:{{ i.line }}{% endif %}</span></td>
+        <td class="wrap">{{ i.message }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="note">No se ha encontrado ningún problema.</p>{% endif %}
+
+  {% if report.diff %}
+  <h3>Cambios respecto a {{ report.base_label }}</h3>
+  {% if report.diff.base and report.diff.base.kind == 'client' and not report.diff.base.installed %}
+  <p class="note">La app no está instalada en {{ report.diff.base.client }}: todo es nuevo.</p>
+  {% endif %}
+  <table>
+    <thead><tr><th>Tipo</th><th class="num">Nuevos</th><th class="num">Modificados</th><th class="num">Usan macros que cambian</th>
+      <th class="num">Eliminados</th><th class="num">Iguales</th></tr></thead>
+    <tbody>
+    {% for t in report.diff.types %}
+      <tr><td>{{ t.label }}{% if t.error %} <span class="muted">· {{ t.error }}</span>{% endif %}</td>
+        <td class="num">{{ t.counts.added | num }}</td><td class="num">{{ t.counts.modified | num }}</td>
+        <td class="num">{{ t.counts.affected | num }}</td>
+        <td class="num">{{ t.counts.removed | num }}</td><td class="num">{{ (t.counts.same + t.counts.present) | num }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if report.diff['items'] %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Tipo</th><th>Objeto</th><th>Estado</th><th>Campos que cambian</th></tr></thead>
+    <tbody>
+    {% for item in report.diff['items'] %}
+      <tr>
+        <td class="nowrap">{{ TYPE_LABELS(item.type) }}</td>
+        <td class="wrap"><b>{{ item.name }}</b>{% if item.affected_by %}<br><span class="muted">usa macros que cambian: {{ item.affected_by | join(', ') }}</span>{% endif %}</td>
+        <td><span class="level level-{{ CHANGES[item.status][1] }}">{{ CHANGES[item.status][0] }}</span></td>
+        <td class="wrap">{% for f in item.fields[:12] %}<code>{{ f.field }}</code>{% if not loop.last %}, {% endif %}{% endfor %}{% if item.fields | length > 12 %} y {{ item.fields | length - 12 }} más{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+  {% endif %}
+
+  {% if report.run %}
+  <h3>Ejecución en {{ report.run.client }} ({{ report.run.created | time }})</h3>
+  <p class="muted">Búsquedas ad hoc con {% if report.run.options.range == 'fixed' %}el rango {{ report.run.options.fixed.earliest }} → {{ report.run.options.fixed.latest }}{% else %}la ventana de cada alerta{% endif %}{% if report.run.options.expand %} y las macros del paquete{% endif %}: no se lanzan las saved searches ni sus acciones.</p>
+  {% if report.run.status == 'cancelled' %}<p class="note">Esta ejecución se canceló: solo están las búsquedas que llegaron a ejecutarse.</p>{% endif %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Búsqueda</th><th>Estado</th><th class="num">Resultados</th><th class="num">Antes</th><th class="num">Duración</th><th>Mensaje</th></tr></thead>
+    <tbody>
+    {% for r in report.run.results %}
+      <tr>
+        <td class="wrap"><b>{{ r.name }}</b><br><span class="muted">{{ r.earliest }} → {{ r.latest }}</span></td>
+        <td><span class="level level-{{ RUNS[r.status][1] }}">{{ RUNS[r.status][0] }}</span></td>
+        <td class="num">{{ r.result_count | num }}</td>
+        <td class="num">{% if r.previous %}{{ r.previous.result_count | num }}{% else %}—{% endif %}</td>
+        <td class="num">{% if r.duration is not none %}{{ r.duration | num(1) }} s{% else %}—{% endif %}</td>
+        <td class="wrap">{{ r.message }}{% if r.previous and r.previous.message %}<br><span class="muted">Anterior: {{ r.previous.message }}</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+
+  <div class="footer">Generado por Splunk Manager. La validación del paquete no consulta ningún Splunk; la validación en un cliente usa sus macros, lookups y el parser de Splunk (sin ejecutar nada) y la ejecución lanza búsquedas ad hoc que no escriben ni envían datos.</div>
+</div>
+</body>
+</html>

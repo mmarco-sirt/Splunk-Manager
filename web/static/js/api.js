@@ -1,7 +1,7 @@
 // Cliente HTTP de la API. La cabecera X-Splunk-Manager es obligatoria en las peticiones que modifican algo.
 const HEADERS = { 'Content-Type': 'application/json', 'X-Splunk-Manager': '1' };
 
-export async function api(path, { method = 'GET', body, params } = {}) {
+export async function api(path, { method = 'GET', body, params, raw } = {}) {
   let url = path;
   if (params) {
     const query = new URLSearchParams();
@@ -16,8 +16,9 @@ export async function api(path, { method = 'GET', body, params } = {}) {
   try {
     response = await fetch(url, {
       method,
-      headers: HEADERS,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      // raw: un archivo tal cual (p. ej. un paquete de app), con la misma cabecera anti-CSRF
+      headers: raw ? { 'Content-Type': 'application/octet-stream', 'X-Splunk-Manager': '1' } : HEADERS,
+      body: raw ?? (body === undefined ? undefined : JSON.stringify(body)),
     });
   } catch (e) {
     throw new Error('No se puede contactar con el servidor de Splunk Manager. ¿Sigue en marcha main_web.py?');
@@ -42,5 +43,6 @@ export const get = (path, params) => api(path, { params });
 export const post = (path, body = {}) => api(path, { method: 'POST', body });
 export const put = (path, body = {}) => api(path, { method: 'PUT', body });
 export const del = (path) => api(path, { method: 'DELETE' });
+export const upload = (path, file, params) => api(path, { method: 'POST', raw: file, params });
 
 export const enc = encodeURIComponent;

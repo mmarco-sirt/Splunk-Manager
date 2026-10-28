@@ -400,6 +400,11 @@ def write_html(path, report):
 
 
 def write_pdf(path, report):
+    html_to_pdf(render_html({**report, "pdf": True}), path)
+
+
+def html_to_pdf(html, path):
+    """Convierte un HTML en PDF con Microsoft Edge o Chrome en modo headless."""
     browser = find_browser()
     if not browser:
         raise RuntimeError("No se encontró Microsoft Edge ni Chrome para generar el PDF.")
@@ -407,7 +412,7 @@ def write_pdf(path, report):
     try:
         html_path = os.path.join(work, "informe.html")
         with open(html_path, "w", encoding="utf-8") as f:
-            f.write(render_html({**report, "pdf": True}))
+            f.write(html)
         command = [browser, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
                    "--disable-extensions", f"--user-data-dir={os.path.join(work, 'perfil')}",
                    "--no-pdf-header-footer", "--print-to-pdf-no-header", f"--print-to-pdf={path}",

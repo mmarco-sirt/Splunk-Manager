@@ -20,3 +20,6 @@ dist/
 
 # Logs del modo no interactivo del CLI
 logs/
+
+# Paquetes de app subidos para validarlos (contienen la app y resultados de los clientes)
+apps_subidas/

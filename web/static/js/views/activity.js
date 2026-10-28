@@ -1,8 +1,9 @@
 // Tareas en segundo plano: panel con el log en vivo y vista de actividad.
-import { get, del, enc } from '../api.js';
+import { get, post, del, enc } from '../api.js';
 import { state, on, refreshJobs } from '../core.js';
 import {
   h, append, clear, icon, button, openDrawer, pageHeader, DataTable, statusLabel, fmtDate, fmtRelative, fmtDuration, errorBox,
+  withBusy, toast, fmtNum,
 } from '../ui.js';
 
 const STATUS = {
@@ -10,13 +11,36 @@ const STATUS = {
   success: { text: 'Completada', variant: 'good', icon: 'checkCircle' },
   partial: { text: 'Con errores', variant: 'warn', icon: 'alert' },
   error: { text: 'Fallida', variant: 'bad', icon: 'xCircle' },
+  cancelled: { text: 'Cancelada', variant: 'muted', icon: 'stop' },
 };
 
 export function jobStatus(job) {
   const s = STATUS[job.status] || STATUS.running;
-  const el = statusLabel(s.text, s.variant, job.status === 'running' ? null : s.icon);
+  const text = job.status === 'running' && job.cancel_requested ? 'Cancelando…' : s.text;
+  const el = statusLabel(text, s.variant, job.status === 'running' ? null : s.icon);
   if (job.status === 'running') el.prepend(h('span', { class: 'spinner' }));
   return el;
+}
+
+/** Barra de progreso de una tarea en curso que lo indica (n de m). */
+export function jobProgress(job) {
+  const p = job.progress;
+  if (job.status !== 'running' || !p?.total) return null;
+  const pct = Math.min(100, Math.round((p.done / p.total) * 100));
+  return h('div', { class: 'job-progress', title: p.label || '' },
+    h('div', { class: 'meter' }, h('span', { style: { width: `${Math.max(pct, 2)}%` } })),
+    h('span', { class: 'muted' }, `${fmtNum(p.done)} de ${fmtNum(p.total)}${p.label ? ` · ${p.label}` : ''}`));
+}
+
+/** Pide cancelar una tarea (las que lo admiten paran al terminar el paso en curso). */
+export async function cancelJob(job) {
+  try {
+    await post(`/api/jobs/${enc(job.id)}/cancel`);
+    toast('Cancelando la tarea: se detendrá al terminar el paso en curso.', 'info');
+    await refreshJobs();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
 
 function lineClass(line) {
@@ -27,7 +51,10 @@ function lineClass(line) {
   return '';
 }
 
-const KIND_LABELS = { backup: 'Backup', restore: 'Restore', copy: 'Copia entre clientes', report: 'Informe' };
+const KIND_LABELS = {
+  backup: 'Backup', restore: 'Restore', copy: 'Copia entre clientes', report: 'Informe', edit: 'Edición',
+  'app-check': 'Validación de app', 'app-run': 'Ejecución de búsquedas',
+};
 
 function fileHref(path) {
   const [folder, ...rest] = path.split('/');
@@ -54,12 +81,19 @@ export function openJobDrawer(jobId) {
 
   const renderMeta = (job) => {
     drawer.setTitle(job.title, job.clients.join(', '));
+    let cancelBtn = null;
+    if (job.cancellable) {
+      cancelBtn = button('Cancelar', { size: 'sm', iconName: 'stop' });
+      cancelBtn.addEventListener('click', () => withBusy(cancelBtn, () => cancelJob(job)));
+    }
     append(clear(metaEl), [
       jobStatus(job),
       h('span', {}, icon('clock'), ' ', fmtDate(job.started)),
       h('span', {}, 'Duración: ', fmtDuration((job.finished || Date.now() / 1000) - job.started)),
       job.errors ? h('span', { class: 'status status-bad' }, `${job.errors} errores`) : null,
-      job.warnings ? h('span', { class: 'status status-warn' }, `${job.warnings} avisos`) : null]);
+      job.warnings ? h('span', { class: 'status status-warn' }, `${job.warnings} avisos`) : null,
+      cancelBtn,
+      jobProgress(job)]);
     clear(filesEl);
     if (job.files?.length) {
       filesEl.append(h('h4', { class: 'section-title', style: { marginTop: '0' } }, 'Archivos generados o modificados'),
@@ -113,7 +147,7 @@ export default {
         ],
       }],
       columns: [
-        { key: 'status', label: 'Estado', render: jobStatus, sort: (j) => j.status },
+        { key: 'status', label: 'Estado', render: (j) => h('div', {}, jobStatus(j), jobProgress(j)), sort: (j) => j.status },
         { key: 'title', label: 'Tarea', render: (j) => h('div', {}, h('div', { class: 'cell-main' }, j.title), h('div', { class: 'cell-sub' }, KIND_LABELS[j.kind] || j.kind)) },
         { key: 'clients', label: 'Clientes', render: (j) => j.clients.join(', '), sort: (j) => j.clients.join(',') },
         { key: 'started', label: 'Inicio', defaultDir: 'desc', render: (j) => h('span', { title: fmtDate(j.started) }, fmtRelative(j.started)) },

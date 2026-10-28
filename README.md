@@ -3,8 +3,8 @@
 Herramienta para administrar varias plataformas Splunk: backup y restore de alertas, macros, usuarios, roles,
 dashboards y reportes (también en modo batch sobre varios clientes), edición de alertas (también en varios clientes a
 la vez), dependencias de cada alerta (macros y lookups), inventario de lookups, análisis de alertas ruidosas y muertas,
-comparación de clientes e informes en Excel/HTML/PDF. El CLI se puede
-programar con el Programador de tareas de Windows para hacer backups e informes automáticos.
+comparación de clientes, validación de versiones de la app de SIRT antes de desplegarlas e informes en Excel/HTML/PDF.
+El CLI se puede programar con el Programador de tareas de Windows para hacer backups e informes automáticos.
 
 ## Estructura
 
@@ -19,8 +19,9 @@ core/
   backup_files.py        Listado y selección de archivos de backup
   conventions.py         Convenciones de SIRT: casos de uso CU- / TEST - CU- y la app de SIRT
   knowledge.py           Saved searches y macros de todas las apps y usuarios, y cómo localizar cada una
-  spl.py                 Análisis estático de SPL: macros que llama y lookups que usa
+  spl.py                 Análisis estático de SPL: macros, lookups, comandos que escriben datos y expansión de macros
   dependencies.py        Dependencias de una búsqueda (macros anidadas y lookups) y si se ven desde su app
+  splunk_conf.py         Lectura de .conf/.meta como Splunk (stanzas, continuaciones, duplicados) y de su codificación
 options/
   alerts/                Backup / restore / listado / habilitar y deshabilitar alertas (incl. Enterprise Security)
   macros/  users/  roles/  dashboards/  reports/
@@ -31,6 +32,10 @@ web/
   explorer.py            Consultas en vivo (alertas, macros, usuarios, índices, búsquedas SPL...)
   lookups.py             Lookups (definiciones, archivos y automáticos), dónde se usan y vista previa
   dependencies.py        Dependencias de una saved search en un cliente
+  app_packages.py        Validar app: paquetes subidos (lectura segura, historial y resultados guardados)
+  app_diff.py            Validar app: cambios entre versiones o frente a un cliente
+  app_validation.py      Validar app: comprobaciones del paquete y contra un cliente, y ejecución de búsquedas
+  app_report.py          Validar app: informe en Excel, HTML y PDF
   alert_editor.py        Edición de alertas y reportes (también en bloque)
   multi_edit.py          Edición de alertas en varios clientes a la vez (vista previa y backup)
   alert_analysis.py      Análisis de alertas: ruidosas, muertas, planificador y tendencia
@@ -42,6 +47,7 @@ web/
 tests/                   Tests de las funciones puras (python -m unittest discover -s tests -t .)
 backups/<tipo>/          Backups generados (no se versiona)
 informes/                Informes generados (no se versiona)
+apps_subidas/            Versiones de la app subidas en «Validar app» y sus resultados (no se versiona)
 logs/                    Logs del modo no interactivo del CLI (no se versiona)
 config.py                Clientes y credenciales cifradas (no se versiona)
 ```
@@ -129,12 +135,14 @@ Secciones:
   sobrescribir se guarda lo que había en `backups/<tipo>/…antes_de_copiar_<host>_backup.json`. En alertas y reportes,
   **Emparejar TEST y producción** pone `TEST - CU-X` y `CU-X` en la misma fila para ver en qué fase está cada cliente
   (en cada uno se compara la misma fase que en la referencia, o la otra si no la tiene); la copia usa el nombre real.
+- **Validar app**: validación de una versión de la app de SIRT antes de desplegarla (ver «Validar app»).
 - **Informes**: informe de uno o varios clientes con salud, ingesta, inventario y análisis de alertas, índices y usuarios/roles,
   en **Excel**, **HTML** (para ver o imprimir) y **PDF** (se genera con Microsoft Edge en modo headless). Se guardan en
   `informes/`. También desde «Salud de clientes» → «Exportar informe…».
 - **Clientes**: alta, edición, borrado y prueba de cada credencial antes de guardar (las contraseñas y tokens nunca
   se envían al navegador). Cada cliente puede indicar su **App SIRT** si allí no se llama `sirt_soc_app_for_splunk`.
-- **Actividad**: cada backup/restore se ejecuta como tarea en segundo plano con su log en vivo.
+- **Actividad**: cada backup/restore se ejecuta como tarea en segundo plano con su log en vivo. Las tareas largas de
+  «Validar app» muestran su progreso (n de m) y se pueden **cancelar**: paran al terminar la búsqueda en curso.
 
 Opciones: `--port 8765`, `--host 127.0.0.1`, `--no-browser`. Por defecto solo escucha en este equipo.
 Para abrirlo a la red (`--host 0.0.0.0`) es obligatorio definir una contraseña de acceso en la variable de
@@ -174,6 +182,62 @@ uno se identifica por su nombre, app, propietario y compartición (`core/knowled
   (el SDK toma `sharing` como namespace), así que no cambiaba la macro de la app. Con los backups antiguos las macros
   existentes se siguen haciendo globales y las nuevas se crean como antes.
 - En Comparar, los privados aparecen como `nombre [privada de usuario]`.
+
+## Validar app
+
+Sección **Gestión → Validar app**, para comprobar una versión de la app de SIRT antes de desplegarla.
+
+**Subir.** Se admite `.tgz`, `.tar.gz`, `.spl` y `.zip` (como mucho 100 MB, 200 MB descomprimido y 10.000 archivos).
+Cada versión se guarda tal cual en `apps_subidas/<app>/<fecha>_<versión>/` y queda en el historial (las 30 últimas de
+cada app; subir otra vez el mismo archivo no lo duplica). Sus archivos nunca se extraen a disco: se leen en memoria
+rechazando rutas absolutas o con `..`, enlaces, dispositivos y nombres reservados de Windows. La versión se lee de
+`default/app.conf` (`[launcher] version`, y `[id]`).
+
+**Validación (pestaña Validación).** Sin consultar ningún Splunk:
+- Codificación: UTF-8 válido, sin BOM (error en .conf, .meta y CSV), sin tildes o eñes rotas («Ã³») y sin finales de
+  línea mezclados.
+- Sintaxis de los `.conf` y `.meta` (`core/splunk_conf.py`): stanzas bien cerradas, líneas sin `clave = valor`,
+  continuaciones `\` (también la `\` seguida de espacios, que corta la línea) y claves repetidas.
+- `app.conf` (versión X.Y.Z, que coincidan `[id]` y `[launcher]`, id y carpeta, nombre visible) y `local/` dentro del
+  paquete (AppInspect lo rechaza en Splunk Cloud).
+- Nombres de las saved searches: `[TEST - ]CU-<TEC>-<ID>-<MITRE> <Nombre>`, con TEC en mayúsculas (uno o varios bloques
+  con guiones), ID numérico y técnica `T1234` o `T1234.567`. En las alertas es un error; en los informes, un aviso.
+- Campos obligatorios de cada alerta: descripción, cron (válido y con `enableSched = 1`), ventana
+  (`dispatch.earliest_time`), condición de disparo, severidad y acciones. Las versiones TEST habilitadas o sin
+  supresión se avisan.
+- Macros y lookups que usan las búsquedas y no están en el paquete (un aviso por macro, con las búsquedas que la usan),
+  CSV de los lookups (cabecera y nº de columnas) y XML de los dashboards.
+
+**Validar en el cliente** (tarea cancelable): versión instalada (avisa si el paquete no es más nuevo), macros y lookups
+que no existen ni en el paquete ni en el cliente o no se ven desde la app, y el SPL de cada búsqueda pasado por el
+**parser de Splunk** (`search/parser` con `parse_only`, que no ejecuta nada, ni siquiera las subbúsquedas). Se guarda en
+`checks/` y se puede volver a ver.
+
+**Cambios (pestaña Cambios).** Frente a otra versión subida o a lo que hay instalado en un cliente: objetos nuevos,
+modificados y eliminados (saved searches, macros, eventtypes, transforms, props, permisos, lookups, dashboards…) con las
+diferencias campo a campo. Entre versiones se distingue `default/` y `local/` (los campos de local llevan `[local]`).
+Contra un cliente se comparan los campos que define el paquete con los de la app instalada (en el cliente no se puede
+saber qué viene de su `local/`, p. ej. una alerta editada desde Splunk Web), y de los lookups solo si están (Splunk no
+deja leer su contenido por REST). Las saved searches que no cambian pero usan una macro que sí cambia aparecen como
+«Usa macros que cambian».
+
+**Ejecución (pestaña Ejecución).** Ejecuta en un cliente el SPL de las búsquedas elegidas (por defecto, las nuevas, las
+que cambian de SPL y las que usan macros que cambian), con la ventana de cada alerta o un rango fijo:
+- **Solo búsquedas ad hoc** (`search/jobs`): nunca se lanza la saved search, así que no se envían emails, notables ni
+  webhooks. No se crea ni modifica nada en Splunk y cada job se borra al terminar.
+- No se ejecuta nada que escriba o envíe datos: `outputlookup`, `collect`, `sendemail`, `sendalert`, `delete`,
+  `script`… y los comandos que empiezan por send/output/notify/post/push/write/ingest. Se comprueba en el texto (con las
+  macros del paquete ya sustituidas) y en los comandos que devuelve el parser con las macros del cliente.
+- Con «Usar las macros del paquete» se sustituyen por su definición antes de ejecutar, para probar la versión nueva
+  aunque el cliente tenga las antiguas (las de tipo eval y los lookups o eventtypes nuevos se resuelven con lo del
+  cliente). Las alertas en tiempo real se ejecutan como búsqueda histórica con la misma ventana.
+- Opcionalmente se ejecuta también la versión anterior (la de la versión comparada o la instalada en el cliente) para
+  comparar el nº de resultados. Una detrás de otra, con tiempo máximo por búsqueda, progreso y cancelación. Resultado de
+  cada una: OK, con avisos, error (con el mensaje de Splunk), no ejecutada, tiempo agotado o cancelada, con resultados,
+  eventos, duración y la diferencia con la versión anterior. Se guarda en `runs/`.
+
+**Exportar informe**: Excel, HTML y PDF en `informes/` (aparecen también en «Informes») con los problemas, los cambios
+respecto a la versión comparada y la validación y ejecución elegidas.
 
 ## Historial de backups
 

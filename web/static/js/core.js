@@ -175,6 +175,7 @@ function onJobFinished(job) {
     success: `Tarea completada: ${job.title}`,
     partial: `Tarea completada con ${job.errors} ${job.errors === 1 ? 'error' : 'errores'}: ${job.title}`,
     error: `La tarea falló: ${job.title}`,
+    cancelled: `Tarea cancelada: ${job.title}`,
   }[job.status] || job.title;
   const type = { success: 'success', partial: 'warn', error: 'error' }[job.status] || 'info';
   toast(text, type, { action: { label: 'Ver', onClick: () => emit('open-job', job.id) } });

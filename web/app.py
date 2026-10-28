@@ -11,8 +11,8 @@ from core.conventions import SIRT_APP, SIRT_APP_LABEL
 from core.paths import backup_dir
 from options.alerts.backup_alerts import TECNOLOGIAS
 from web import (
-    alert_analysis, alert_editor, compare, dependencies, explorer, lookups, macro_editor, multi_edit, operations, reports,
-    services,
+    alert_analysis, alert_editor, app_diff, app_packages, app_report, app_validation, compare, dependencies, explorer, lookups,
+    macro_editor, multi_edit, operations, reports, services,
 )
 from web.health import monitor as health_monitor
 from web.jobs import install_output_router, jobs
@@ -42,6 +42,7 @@ def create_app(password=None, restrict_host=True):
     """
     app = Flask(__name__)
     app.json.sort_keys = False
+    app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024   # paquetes de app (como mucho 100 MB) y backups JSON
     install_output_router()
     ensure_config_exists()
     try:
@@ -378,6 +379,99 @@ def create_app(password=None, restrict_host=True):
         if not job:
             abort(404)
         return jsonify(job.detail(int(request.args.get("since", 0))))
+
+    @app.post("/api/jobs/<job_id>/cancel")
+    def jobs_cancel(job_id):
+        if not jobs.cancel(job_id):
+            raise OperationError("Esta tarea no se puede cancelar (o ya ha terminado).")
+        return jsonify(ok=True)
+
+    # --- Validar app: versiones subidas, validación, cambios, ejecución e informe ---
+
+    def package_base(data):
+        """Con qué se compara: otra versión subida ({"package": id}) o un cliente ({"client": nombre})."""
+        base = data.get("base") or {}
+        if base.get("package"):
+            return {"package": str(base["package"])}
+        if base.get("client"):
+            target_clients({"clients": [base["client"]]})
+            return {"client": str(base["client"])}
+        return None
+
+    @app.get("/api/app-packages")
+    def app_packages_list():
+        return jsonify(app_packages.list_packages())
+
+    @app.post("/api/app-packages")
+    def app_packages_upload():
+        if (request.content_length or 0) > app_packages.MAX_PACKAGE_BYTES:
+            raise app_packages.PackageError(f"El paquete ocupa más de {app_packages.MAX_PACKAGE_BYTES // (1024 * 1024)} MB.")
+        meta = app_packages.save_package(request.args.get("filename"), request.get_data(cache=False),
+                                         summarize=app_validation.summary)
+        return jsonify(meta), 200 if meta.get("duplicate") else 201
+
+    @app.get("/api/app-packages/<package_id>")
+    def app_packages_detail(package_id):
+        package = app_packages.load_package(package_id)
+        issues = app_validation.validate_package(package)
+        meta = app_packages.update_meta(package_id, summary=app_validation.counts(issues))
+        return jsonify(meta=meta, info=package.info(), issues=issues, searches=app_validation.search_rows(package),
+                       checks=app_packages.list_results(package_id, "checks"), runs=app_packages.list_results(package_id, "runs"))
+
+    @app.delete("/api/app-packages/<package_id>")
+    def app_packages_delete(package_id):
+        app_packages.delete_package(package_id)
+        return jsonify(ok=True)
+
+    @app.post("/api/app-packages/<package_id>/diff")
+    def app_packages_diff(package_id):
+        base = package_base(body())
+        if not base:
+            raise OperationError("Elija con qué comparar: otra versión subida o un cliente.")
+        package = app_packages.load_package(package_id)
+        if "package" in base:
+            if base["package"] == package_id:
+                raise OperationError("Elija otra versión distinta para comparar.")
+            other = app_packages.load_package(base["package"])
+            result = app_diff.diff_packages(package, other)
+            result["base"] = {"kind": "package", "id": base["package"], "version": other.info()["version"],
+                              "filename": app_packages.get_meta(base["package"])["filename"]}
+        else:
+            service = services.get_service(base["client"])
+            snapshot = app_diff.client_snapshot(service, package.info()["id"], package.conf_names())
+            result = app_diff.diff_client(package, snapshot)
+            result["base"] = {"kind": "client", "client": base["client"], "installed": snapshot["installed"]}
+        for kind in result["types"]:
+            kind["label"] = app_diff.type_label(kind["type"])
+        return jsonify(result)
+
+    @app.post("/api/app-packages/<package_id>/check")
+    def app_packages_check(package_id):
+        client = target_clients({"clients": [body().get("client")]})[0]
+        title, action = app_validation.build_check(package_id, client)
+        job = jobs.start(title, "app-check", [client], action, cancellable=True, meta={"package": package_id})
+        return jsonify(job.summary()), 202
+
+    @app.post("/api/app-packages/<package_id>/run")
+    def app_packages_run(package_id):
+        data = body()
+        client = target_clients({"clients": [data.get("client")]})[0]
+        title, action = app_validation.build_run(package_id, client, data.get("names") or [], data.get("options") or {},
+                                                 package_base(data))
+        job = jobs.start(title, "app-run", [client], action, cancellable=True, meta={"package": package_id})
+        return jsonify(job.summary()), 202
+
+    @app.get("/api/app-packages/<package_id>/results/<kind>/<result_id>")
+    def app_packages_result(package_id, kind, result_id):
+        return jsonify(app_packages.read_result(package_id, kind, result_id))
+
+    @app.post("/api/app-packages/<package_id>/report")
+    def app_packages_report(package_id):
+        data = body()
+        options = {**(data.get("options") or {}), "base": package_base(data.get("options") or {})}
+        title, action = app_report.build_report(package_id, data.get("formats"), options)
+        job = jobs.start(title, "report", [], action, meta={"package": package_id})
+        return jsonify(job.summary()), 202
 
     @app.delete("/api/jobs")
     def jobs_clear():

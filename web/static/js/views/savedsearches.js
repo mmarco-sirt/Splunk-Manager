@@ -29,6 +29,7 @@ const DEP_STATUS = {
   missing: ['No existe', 'bad', 'xCircle'],
   file_missing: ['Falta el archivo CSV', 'bad', 'xCircle'],
   file_not_visible: ['El CSV no se ve', 'bad', 'eyeOff'],
+  created: ['Lo crea la búsqueda', 'outline', 'plus'],
 };
 
 const depWhere = (d) => [d.app, d.sharing === 'user' ? `privada de ${d.owner}` : SHARING_LABELS[d.sharing] || d.sharing].filter(Boolean).join(' · ');
@@ -40,6 +41,7 @@ function depHint(d, context) {
   if (d.status === 'not_visible') return `Solo existe en ${d.not_visible_in.map(depWhere).join(' | ')}: desde ${context.app} no se ve.`;
   if (d.status === 'file_missing') return `${depWhere(d)} · su archivo ${d.filename} no existe.`;
   if (d.status === 'file_not_visible') return `${depWhere(d)} · su archivo ${d.filename} no se ve desde ${context.app}.`;
+  if (d.status === 'created') return 'No existe todavía: outputlookup lo crea al ejecutarse.';
   const parts = [depWhere(d)];
   if (d.also?.length) parts.push(`tapa a otra definición en ${d.also.map(depWhere).join(' | ')}`);
   return parts.join(' · ');

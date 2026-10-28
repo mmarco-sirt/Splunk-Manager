@@ -12,6 +12,7 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.py")
 BACKUP_ROOT = os.path.join(BASE_DIR, "backups")
 REPORTS_ROOT = os.path.join(BASE_DIR, "informes")
 LOGS_ROOT = os.path.join(BASE_DIR, "logs")
+UPLOADS_ROOT = os.path.join(BASE_DIR, "apps_subidas")
 
 
 def backup_dir(name=""):
@@ -31,6 +32,12 @@ def logs_dir():
     """Devuelve la ruta absoluta de logs/ (logs del modo no interactivo del CLI) y la crea si no existe."""
     os.makedirs(LOGS_ROOT, exist_ok=True)
     return LOGS_ROOT
+
+
+def uploads_dir():
+    """Devuelve la ruta absoluta de apps_subidas/ (paquetes de app subidos para validarlos) y la crea si no existe."""
+    os.makedirs(UPLOADS_ROOT, exist_ok=True)
+    return UPLOADS_ROOT
 
 
 def host_tag(service):
