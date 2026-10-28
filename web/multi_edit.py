@@ -9,12 +9,17 @@ que puede ser distinto en cada uno).
 
 Al aplicar solo se modifican las saved searches de la vista previa y solo si los campos afectados siguen igual que en la
 vista previa (huella 'fingerprint'); si alguien los ha cambiado entretanto, se omiten.
+
+La versión TEST y la de producción de un caso de uso («TEST - CU-X» y «CU-X») son saved searches distintas: se buscan
+por su nombre exacto, y la búsqueda indica además en qué clientes existe la otra versión para poder añadirla.
 """
 import hashlib
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 
+from core.conventions import is_counterpart
+from core.knowledge import ALL_NAMESPACES
 from options.alerts.backup_alerts import backup_before_edit
 from web import services
 from web.alert_editor import (
@@ -68,7 +73,17 @@ def validate_ops(ops):
 
 
 def item_key(client, s):
-    return "|".join([client, s.access.get("app") or "", s.access.get("owner") or "", s.name])
+    access = s.access
+    return "|".join([client, access.get("app") or "", access.get("owner") or "", access.get("sharing") or "", s.name])
+
+
+def _key_label(key):
+    """'cliente|app|propietario|compartición|nombre' -> «nombre» (app) o «nombre» (app, privada de propietario)."""
+    _client, app, owner, sharing, name = key.split("|", 4)
+    where = app or "sin app"
+    if sharing == "user":
+        where += f", privada de {owner}"
+    return f"«{name}» ({where})"
 
 
 def _fingerprint(s, ops):
@@ -94,16 +109,31 @@ def plan(s, ops):
     return (effective_changes(s, validate_changes(changes)) if changes else {}), not_found
 
 
-def find_by_name(service, names):
-    """{nombre: [saved searches con ese nombre exacto]}; puede haber varias del mismo nombre en distintas apps."""
-    data = _read_json(service, "saved/searches", count=0, f=["disabled"])
+def _entries(service):
+    """Nombre y ACL de todas las saved searches (de todas las apps y usuarios), sin su configuración."""
+    return _read_json(service, "saved/searches", count=0, f=["disabled"], **ALL_NAMESPACES).get("entry", [])
+
+
+def find_by_name(service, names, entries=None):
+    """
+    {nombre: [saved searches con ese nombre exacto]}; puede haber varias del mismo nombre en distintas apps o de distintos
+    usuarios. 'entries' evita volver a pedir la lista si ya se tiene.
+    """
     found = {name: [] for name in names}
-    for entry in data.get("entry", []):
+    for entry in _entries(service) if entries is None else entries:
         name = entry.get("name")
         if name in found:
             acl = entry.get("acl", {})
-            found[name].append(saved_search(service, name, acl.get("app"), acl.get("owner")))
+            found[name].append(saved_search(service, name, acl.get("app"), acl.get("owner"), acl.get("sharing")))
     return found
+
+
+def counterparts(names, existing):
+    """
+    {nombre: [su otra versión entre los nombres 'existing']}: para «CU-X», «TEST - CU-X» y viceversa. No incluye las que ya
+    están en 'names'.
+    """
+    return {name: sorted({other for other in existing if is_counterpart(name, other)} - set(names)) for name in names}
 
 
 def _per_client(clients, fn):
@@ -112,18 +142,33 @@ def _per_client(clients, fn):
 
 
 def lookup(names, clients):
-    """En qué clientes existe cada alerta y con qué configuración: {names, clients: [{client, error, items}]}."""
+    """
+    En qué clientes existe cada alerta y con qué configuración: {names, clients: [{client, error, items}], pairs}.
+    'pairs' indica, para cada nombre, su otra versión (TEST o producción) y en qué clientes existe:
+    {nombre: [{name, clients}]}.
+    """
     names = _names(names)
 
     def one(client):
         try:
-            found = find_by_name(services.get_service(client), names)
+            service = services.get_service(client)
+            entries = _entries(service)
+            found = find_by_name(service, names, entries)
         except Exception as e:
-            return {"client": client, "error": str(e), "items": []}
+            return {"client": client, "error": str(e), "items": [], "pairs": {}}
         return {"client": client, "error": None,
-                "items": [{"name": n, "rows": [saved_search_row(s) for s in found[n]]} for n in names]}
+                "items": [{"name": n, "rows": [saved_search_row(s) for s in found[n]]} for n in names],
+                "pairs": counterparts(names, {e.get("name") for e in entries})}
 
-    return {"names": names, "clients": _per_client(clients, one)}
+    results = _per_client(clients, one)
+    pairs = {}
+    for result in results:
+        for name, others in result.pop("pairs").items():
+            for other in others:
+                pairs.setdefault(name, {}).setdefault(other, []).append(result["client"])
+    return {"names": names, "clients": results,
+            "pairs": {name: [{"name": other, "clients": found_in} for other, found_in in sorted(found.items())]
+                      for name, found in pairs.items()}}
 
 
 def preview(names, clients, ops):
@@ -144,7 +189,7 @@ def preview(names, clients, ops):
                 items.append({"client": client, "name": name, "status": "missing"})
             for s in found[name]:
                 item = {"client": client, "name": s.name, "app": s.access.get("app"), "owner": s.access.get("owner"),
-                        "key": item_key(client, s), "row": saved_search_row(s)}
+                        "sharing": s.access.get("sharing"), "key": item_key(client, s), "row": saved_search_row(s)}
                 try:
                     effective, not_found = plan(s, ops)
                 except EditError as e:
@@ -173,7 +218,7 @@ def build_apply(names, ops, targets):
     expected = {}
     for target in targets or []:
         key, fingerprint = str(target.get("key") or ""), str(target.get("fingerprint") or "")
-        if key.count("|") >= 3 and fingerprint:
+        if key.count("|") >= 4 and fingerprint:
             expected.setdefault(key.split("|", 1)[0], {})[key] = fingerprint
     if not expected:
         raise OperationError("No hay nada que aplicar: genere antes la vista previa.")
@@ -195,7 +240,7 @@ def build_apply(names, ops, targets):
             pending = []
             for key, fingerprint in wanted.items():
                 s = present.get(key)
-                label = f"«{key.split('|', 3)[3]}» ({key.split('|')[1] or 'sin app'})"
+                label = _key_label(key)
                 if s is None:
                     print(f"⚠️ {label} ya no existe en {client}: se omite.")
                     skipped += 1

@@ -15,6 +15,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
+from core.knowledge import all_saved_searches
 from options.alerts.backup_alerts import _is_alert, _is_es_use_case
 from web.explorer import _flag, oneshot_results, saved_search_row
 
@@ -245,9 +246,12 @@ def trend_text(stats):
 # --- Análisis -------------------------------------------------------------------------------
 
 def _inventory(service):
-    """Filas de todas las saved searches (las alertas con su configuración de supresión) y sus claves."""
+    """
+    Filas de todas las saved searches de todas las apps y usuarios (las alertas con su configuración de supresión) y sus
+    claves.
+    """
     rows = []
-    for s in service.saved_searches:
+    for s in all_saved_searches(service):
         row = saved_search_row(s)
         row["is_alert_or_es"] = _is_alert(s) or _is_es_use_case(s)
         c = s.content
@@ -297,8 +301,9 @@ def analyze_alerts(service, days=7, noisy_per_day=NOISY_PER_DAY):
         raise AnalysisError(f"El log del planificador (index=_internal sourcetype=scheduler) no devuelve datos de los últimos "
                            f"{days} días. Compruebe que el usuario de Splunk de este cliente puede buscar en _internal.")
 
-    # Las filas del planificador se asocian por nombre y app; si la app no coincide, por nombre si es único
-    by_key = {(r["name"], r["app"]): r for r in inventory}
+    # Las filas del planificador se asocian por nombre y app (si hay una privada y otra compartida, a la compartida); si la
+    # app no coincide, por nombre si es único
+    by_key = {(r["name"], r["app"]): r for r in sorted(inventory, key=lambda r: r["sharing"] != "user")}
     by_name = defaultdict(list)
     for r in inventory:
         by_name[r["name"]].append(r)

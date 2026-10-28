@@ -4,9 +4,9 @@ import { state, startJob } from './core.js';
 import { h, clear, icon, openModal, infoBox, errorBox, fmtNum, fmtDate, fmtBytes, loadingRows } from './ui.js';
 
 export const BACKUP_KINDS = {
-  alerts_all: { label: 'Alertas CU-*', desc: 'Todas las alertas cuyo nombre empieza por CU-.' },
-  alerts_tech: { label: 'Por tecnología', desc: 'Alertas CU-* de una tecnología (AD, FW, AV…).' },
-  alerts_custom: { label: 'Por texto', desc: 'Alertas CU-* cuyo nombre contiene un texto.' },
+  alerts_all: { label: 'Alertas CU-* y TEST', desc: 'Todas las alertas cuyo nombre empieza por CU- o por TEST - CU-, de todas las apps y usuarios.' },
+  alerts_tech: { label: 'Por tecnología', desc: 'Alertas CU-* y TEST - CU-* de una tecnología (AD, FW, AV…).' },
+  alerts_custom: { label: 'Por texto', desc: 'Alertas CU-* y TEST - CU-* cuyo nombre contiene un texto.' },
   es_all: { label: 'Enterprise Security', desc: 'Casos de uso de ES (app de ES o etiqueta ESCU).' },
   es_custom: { label: 'ES por texto', desc: 'Casos de uso de ES cuyo nombre contiene un texto.' },
   reports: { label: 'Reportes', desc: 'Todas las saved searches que no son alertas.' },
@@ -156,6 +156,7 @@ export function fileListPicker(folder, { multi = true, preselected = [] } = {}) 
 /** Opciones de restore según la carpeta (sharing, contraseña inicial) y selección de elementos. */
 export function restoreOptions(folder) {
   const sharing = h('select', { class: 'select' },
+    h('option', { value: 'keep' }, 'Mantener la que tenían'),
     h('option', { value: 'global' }, 'Global (todas las apps)'),
     h('option', { value: 'app' }, 'App'),
     h('option', { value: 'user' }, 'Privado del usuario'));
@@ -165,7 +166,8 @@ export function restoreOptions(folder) {
   const itemized = state.meta?.folders?.[folder]?.itemized;
 
   const el = h('form', { autocomplete: 'off', onsubmit: (e) => e.preventDefault() },
-    (folder === 'alertas' || folder === 'reportes') && h('div', { class: 'field' }, h('label', {}, 'Compartición tras restaurar'), sharing),
+    (folder === 'alertas' || folder === 'reportes') && h('div', { class: 'field' }, h('label', {}, 'Compartición tras restaurar'), sharing,
+      h('span', { class: 'field-hint' }, 'Mantener: las que ya existen conservan la suya (también las privadas) y las nuevas usan la del backup, o global si el backup es antiguo.')),
     folder === 'users' && h('div', { class: 'field' }, h('label', {}, 'Contraseña inicial para usuarios nuevos'), password,
       h('span', { class: 'field-hint' }, 'Los backups no incluyen contraseñas. Sin contraseña inicial, los usuarios que no existan no se crean; los existentes se actualizan igualmente. Se obliga a cambiarla en el primer login.')),
     itemsSlot);

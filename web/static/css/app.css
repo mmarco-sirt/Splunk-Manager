@@ -538,6 +538,18 @@ a.tile:hover { border-color: var(--border-strong); }
 .badge-serious { background: var(--serious-soft); color: var(--serious-text); }
 .badge-outline { background: none; border: 1px solid var(--border-strong); }
 .badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.name-badge { margin-left: 6px; vertical-align: 1px; }
+
+/* Dependencias de una búsqueda (macros anidadas sangradas) y vista previa de lookups */
+.dep-title { font-size: 12px; font-weight: 600; color: var(--text-2); margin: 12px 0 6px; }
+.dep-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.dep-item { padding-left: calc(var(--depth, 0) * 20px); }
+.dep-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dep-head code { font-size: 12.5px; }
+.dep-branch { color: var(--text-3); }
+.dep-item .cell-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; word-break: break-word; }
+.lookup-preview { max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+.lookup-preview table.data th { position: sticky; top: 0; background: var(--surface-2, var(--surface)); }
 
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex: none; }
 .dot-good { background: var(--good); box-shadow: 0 0 0 3px var(--good-soft); }
@@ -642,6 +654,9 @@ a.tile:hover { border-color: var(--border-strong); }
 }
 .toolbar-spacer { flex: 1; }
 .toolbar .count { font-size: 12.5px; color: var(--text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.toolbar-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px; width: 100%; }
+.filter-group { display: inline-flex; align-items: center; gap: 8px; }
+.filter-label { font-size: 11px; font-weight: 650; color: var(--text-3); text-transform: uppercase; letter-spacing: .05em; }
 .selection-bar {
   display: flex;
   align-items: center;
@@ -1286,6 +1301,9 @@ table.data.compact th { padding: 7px 10px; }
 .client-chip .btn-icon { width: 20px; height: 20px; min-height: 0; padding: 0; margin: -2px -4px -2px 0; }
 .medit-found { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .medit-found + .medit-found { margin-top: 4px; }
+.medit-pairs { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 14px; padding: 12px 14px;
+  border: 1px dashed var(--border-strong); border-radius: 10px; }
+.medit-pairs .field-hint { margin: 0 0 2px; }
 .medit-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .medit-line { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 10px; display: grid; gap: 10px; }
 .medit-line-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

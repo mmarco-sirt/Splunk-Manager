@@ -22,6 +22,7 @@ function clientForm(client) {
     username: h('input', { class: 'input', value: client?.username || '', autocomplete: 'off' }),
     password: h('input', { class: 'input', type: 'password', autocomplete: 'new-password', placeholder: client?.has_password ? '•••••••• (sin cambios)' : '' }),
     splunkToken: h('input', { class: 'input', type: 'password', autocomplete: 'off', placeholder: client?.has_token ? '•••••••• (sin cambios)' : '' }),
+    sirt_app: h('input', { class: 'input mono', value: client?.sirt_app || '', placeholder: state.meta?.sirt_app || 'sirt_soc_app_for_splunk', autocomplete: 'off', spellcheck: 'false' }),
   };
   const clearPassword = h('input', { type: 'checkbox' });
   const clearToken = h('input', { type: 'checkbox' });
@@ -104,6 +105,8 @@ function clientForm(client) {
       isEdit && client.has_token ? h('label', { class: 'check', style: { margin: '-6px 0 8px' } }, clearToken, 'Quitar el token guardado') : null,
     ], testToken),
     authSlot,
+    field('App SIRT (opcional)', inputs.sirt_app,
+      `Id de la app de SIRT en este cliente si no se llama ${state.meta?.sirt_app || 'sirt_soc_app_for_splunk'}. Es la que usa el filtro «App SIRT» de los listados.`),
     infoBox('Las contraseñas y tokens se guardan cifrados en config.py con DPAPI de Windows (solo su usuario de Windows puede descifrarlos) y nunca se envían al navegador.'),
     h('label', { class: 'check' }, testAfter, 'Conectar al guardar para comprobar las credenciales'));
   renderAuth();

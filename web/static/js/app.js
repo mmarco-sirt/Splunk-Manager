@@ -11,7 +11,7 @@ import search from './views/search.js';
 import health from './views/health.js';
 import ingest from './views/ingest.js';
 import { alertsView, reportsView } from './views/savedsearches.js';
-import { macrosView, dashboardsView, usersView, rolesView, indexesView, appsView } from './views/objects.js';
+import { macrosView, lookupsView, dashboardsView, usersView, rolesView, indexesView, appsView } from './views/objects.js';
 import backups from './views/backups.js';
 import batch from './views/batch.js';
 import clients from './views/clients.js';
@@ -23,7 +23,7 @@ import activity, { openJobDrawer } from './views/activity.js';
 
 const NAV = [
   { title: 'General', items: [overview, health, search] },
-  { title: 'Objetos', items: [alertsView, alertAnalysis, reportsView, macrosView, dashboardsView] },
+  { title: 'Objetos', items: [alertsView, alertAnalysis, reportsView, macrosView, lookupsView, dashboardsView] },
   { title: 'Acceso', items: [usersView, rolesView] },
   { title: 'Plataforma', items: [indexesView, ingest, appsView] },
   { title: 'Gestión', items: [compare, multiEdit, reports, backups, batch, clients, activity] },

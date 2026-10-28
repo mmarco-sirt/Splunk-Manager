@@ -87,10 +87,15 @@ function renderDashboard(root, client) {
       label: 'Alertas', iconName: 'bell', route: 'alerts', resource: 'saved-searches',
       compute: (rows) => {
         const alerts = rows.filter((r) => r.is_alert || r.is_es);
-        const cu = alerts.filter((r) => r.is_cu).length;
+        const cu = alerts.filter((r) => r.is_cu && !r.is_test).length;
+        const test = alerts.filter((r) => r.is_test).length;
         const es = alerts.filter((r) => r.is_es).length;
         const off = alerts.filter((r) => r.disabled).length;
-        return { value: alerts.length, meta: [h('b', {}, fmtNum(cu)), ' CU- · ', h('b', {}, fmtNum(es)), ' ES · ', h('b', {}, fmtNum(off)), ' deshab.'] };
+        return {
+          value: alerts.length,
+          meta: [h('b', {}, fmtNum(cu)), ' CU- · ', test ? [h('b', {}, fmtNum(test)), ' TEST · '] : null,
+            h('b', {}, fmtNum(es)), ' ES · ', h('b', {}, fmtNum(off)), ' deshab.'],
+        };
       },
     }),
     tile({

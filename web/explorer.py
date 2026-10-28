@@ -4,9 +4,11 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
-from splunklib.binding import HTTPError, namespace
+from splunklib.binding import HTTPError
 from splunklib.client import Job
 
+from core.conventions import is_cu_alert, is_test_alert, strip_test_prefix
+from core.knowledge import all_macros, all_saved_searches, find_saved_search
 from options.alerts.backup_alerts import _is_alert, _is_es_use_case
 
 DEFAULT_MAX_RESULTS = 1000
@@ -60,7 +62,9 @@ def saved_search_row(s):
         "alert_type": c.get("alert_type") or "",
         "is_alert": _is_alert(s),
         "is_es": _is_es_use_case(s),
-        "is_cu": s.name.startswith("CU-"),
+        "is_cu": is_cu_alert(s.name),         # CU-… y también su versión de pruebas TEST - CU-…
+        "is_test": is_test_alert(s.name),
+        "base_name": strip_test_prefix(s.name),
         "es_label": c.get("action.correlationsearch.label") or "",
         "severity": c.get("alert.severity") or "",
         "actions": c.get("actions") or "",
@@ -72,23 +76,24 @@ def saved_search_row(s):
 
 
 def list_saved_searches(service):
-    return [saved_search_row(s) for s in service.saved_searches]
+    """Saved searches de todas las apps y usuarios (también las privadas y las compartidas solo en su app)."""
+    return [saved_search_row(s) for s in all_saved_searches(service)]
 
 
-def saved_search(service, name, app, owner):
-    """Saved search por nombre (en su app/propietario si se indican). KeyError si no existe."""
-    return _saved_search(service, name, app, owner)
+def saved_search(service, name, app, owner, sharing=None):
+    """Saved search por nombre (en su app/propietario/compartición si se indican). KeyError si no existe."""
+    return _saved_search(service, name, app, owner, sharing)
 
 
-def _saved_search(service, name, app, owner):
+def _saved_search(service, name, app, owner, sharing=None):
     if app and owner:
-        return service.saved_searches[name, namespace(owner=owner, app=app)]
+        return find_saved_search(service, name, app, owner, sharing)
     return service.saved_searches[name]
 
 
-def saved_search_action(service, name, app, owner, action):
+def saved_search_action(service, name, app, owner, action, sharing=None):
     """Acciones sobre una saved search: enable, disable o dispatch (ejecutar ahora)."""
-    saved_search = _saved_search(service, name, app, owner)
+    saved_search = _saved_search(service, name, app, owner, sharing)
     if action == "enable":
         saved_search.enable()
         return {"message": f"'{name}' habilitada."}
@@ -117,7 +122,8 @@ def macro_row(m):
 
 
 def list_macros(service):
-    return [macro_row(m) for m in service.macros]
+    """Macros de todas las apps y usuarios (también las privadas y las compartidas solo en su app)."""
+    return [macro_row(m) for m in all_macros(service)]
 
 
 def list_users(service):

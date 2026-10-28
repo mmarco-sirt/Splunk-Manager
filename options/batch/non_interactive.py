@@ -27,7 +27,7 @@ EXIT_OK, EXIT_FAILED, EXIT_USAGE = 0, 1, 2
 MAX_LOGS = 200
 
 BACKUP_KINDS = {
-    "alertas": ("alertas CU-*", backup_alerts),
+    "alertas": ("alertas CU-* y TEST - CU-*", backup_alerts),
     "es": ("casos de uso de Enterprise Security", backup_es_use_cases),
     "reportes": ("reportes", backup_reports),
     "macros": ("macros", backup_macros),

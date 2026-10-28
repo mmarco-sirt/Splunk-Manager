@@ -1,6 +1,7 @@
 import os
 
 from core.backup_files import EDIT_LABEL, merge_backup, write_backup
+from core.knowledge import acl_of, all_macros, same_entry
 from core.paths import backup_dir, host_tag
 
 BACKUP_FOLDER = "macros"
@@ -9,24 +10,27 @@ EXTRA_FIELDS = ("iseval", "disabled", "description", "validation", "errormsg")
 
 
 def macro_entry(macro):
-    """Elemento de backup de una macro."""
+    """
+    Elemento de backup de una macro, con su app, propietario y compartición ('acl') para que el restore actualice esa
+    misma y no otra del mismo nombre.
+    """
     content = macro.content
     entry = {
         "name": macro.name,
         "definition": content.get("definition", ""),
-        "args": content.get("args", "")  # Guarda como cadena vacía si no tiene argumentos
+        "args": content.get("args", ""),  # Guarda como cadena vacía si no tiene argumentos
     }
     for field in EXTRA_FIELDS:
         value = content.get(field)
         if value not in (None, ""):
             entry[field] = value
+    entry["acl"] = acl_of(macro)
     return entry
 
 
 def backup_macros(service):
-    """Realiza un backup de las macros en un archivo JSON dentro de 'backups/macros/'."""
-    # Descargar todas las macros configuradas
-    macros_backup = [macro_entry(macro) for macro in service.macros]
+    """Realiza un backup de las macros (de todas las apps y usuarios) en un archivo JSON dentro de 'backups/macros/'."""
+    macros_backup = [macro_entry(macro) for macro in all_macros(service)]
 
     file_name = os.path.join(backup_dir(BACKUP_FOLDER), f"macros_{host_tag(service)}_backup.json")
     write_backup(file_name, macros_backup)
@@ -37,8 +41,8 @@ def backup_macros(service):
 def backup_before_edit(service, macros):
     """
     Guarda la configuración actual de esas macros en backups/macros/macros_antes_de_editar_<host>_backup.json (con
-    historial), sustituyendo las entradas anteriores con el mismo nombre. Devuelve la ruta del archivo.
+    historial), sustituyendo las entradas anteriores de esas mismas macros. Devuelve la ruta del archivo.
     """
     path = os.path.join(backup_dir(BACKUP_FOLDER), f"macros_{EDIT_LABEL}_{host_tag(service)}_backup.json")
-    merge_backup(path, [macro_entry(m) for m in macros])
+    merge_backup(path, [macro_entry(m) for m in macros], same=same_entry)
     return path

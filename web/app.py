@@ -7,10 +7,12 @@ from splunklib.binding import AuthenticationError, HTTPError
 from werkzeug.exceptions import HTTPException
 
 from core.clients import ensure_config_exists, migrate_config
+from core.conventions import SIRT_APP, SIRT_APP_LABEL
 from core.paths import backup_dir
 from options.alerts.backup_alerts import TECNOLOGIAS
 from web import (
-    alert_analysis, alert_editor, compare, explorer, macro_editor, multi_edit, operations, reports, services,
+    alert_analysis, alert_editor, compare, dependencies, explorer, lookups, macro_editor, multi_edit, operations, reports,
+    services,
 )
 from web.health import monitor as health_monitor
 from web.jobs import install_output_router, jobs
@@ -23,6 +25,7 @@ CSRF_HEADER = "X-Splunk-Manager"
 RESOURCES = {
     "saved-searches": explorer.list_saved_searches,
     "macros": explorer.list_macros,
+    "lookups": lookups.list_lookups,
     "users": explorer.list_users,
     "roles": explorer.list_roles,
     "dashboards": explorer.list_dashboards,
@@ -116,6 +119,8 @@ def create_app(password=None, restrict_host=True):
             report_sections=reports.SECTIONS,
             report_formats=reports.formats(),
             analysis_days=list(alert_analysis.ANALYSIS_DAYS),
+            sirt_app=SIRT_APP,
+            sirt_app_label=SIRT_APP_LABEL,
         )
 
     # --- Clientes ---
@@ -165,20 +170,21 @@ def create_app(password=None, restrict_host=True):
         data = body()
         service = services.get_service(client_param())
         return jsonify(explorer.saved_search_action(
-            service, data.get("name"), data.get("app"), data.get("owner"), data.get("action")))
+            service, data.get("name"), data.get("app"), data.get("owner"), data.get("action"), data.get("sharing")))
 
     @app.get("/api/splunk/saved-searches/detail")
     def saved_search_detail():
         service = services.get_service(client_param())
         return jsonify(alert_editor.saved_search_detail(
-            service, request.args.get("name"), request.args.get("app"), request.args.get("owner")))
+            service, request.args.get("name"), request.args.get("app"), request.args.get("owner"),
+            request.args.get("sharing")))
 
     @app.post("/api/splunk/saved-searches/update")
     def saved_search_update():
         data = body()
         service = services.get_service(client_param())
         return jsonify(alert_editor.update_saved_search(
-            service, data.get("name"), data.get("app"), data.get("owner"), data.get("changes")))
+            service, data.get("name"), data.get("app"), data.get("owner"), data.get("changes"), data.get("sharing")))
 
     @app.post("/api/splunk/saved-searches/bulk-update")
     def saved_search_bulk_update():
@@ -186,18 +192,38 @@ def create_app(password=None, restrict_host=True):
         service = services.get_service(client_param())
         return jsonify(alert_editor.bulk_update(service, data.get("items") or [], data.get("changes")))
 
+    @app.get("/api/splunk/saved-searches/dependencies")
+    def saved_search_dependencies():
+        service = services.get_service(client_param())
+        return jsonify(dependencies.saved_search_dependencies(
+            service, request.args.get("name"), request.args.get("app"), request.args.get("owner"),
+            request.args.get("sharing")))
+
+    @app.get("/api/splunk/lookups/usage")
+    def lookup_usage():
+        service = services.get_service(client_param())
+        return jsonify(lookups.lookup_usage(service, request.args.get("name"), request.args.get("kind")))
+
+    @app.post("/api/splunk/lookups/preview")
+    def lookup_preview():
+        data = body()
+        service = services.get_service(client_param())
+        return jsonify(lookups.lookup_preview(service, data.get("name"), data.get("app"), data.get("owner"),
+                                              data.get("sharing")))
+
     @app.get("/api/splunk/macros/detail")
     def macro_detail():
         service = services.get_service(client_param())
         return jsonify(macro_editor.macro_detail(
-            service, request.args.get("name"), request.args.get("app"), request.args.get("owner")))
+            service, request.args.get("name"), request.args.get("app"), request.args.get("owner"),
+            request.args.get("sharing")))
 
     @app.post("/api/splunk/macros/update")
     def macro_update():
         data = body()
         service = services.get_service(client_param())
         return jsonify(macro_editor.update_macro(
-            service, data.get("name"), data.get("app"), data.get("owner"), data.get("changes")))
+            service, data.get("name"), data.get("app"), data.get("owner"), data.get("changes"), data.get("sharing")))
 
     @app.post("/api/splunk/macros/bulk-update")
     def macro_bulk_update():
@@ -306,7 +332,7 @@ def create_app(password=None, restrict_host=True):
     def compare_run():
         data = body()
         return jsonify(compare.compare_clients(data.get("type"), data.get("reference"), data.get("targets") or [],
-                                               data.get("fields") or "main"))
+                                               data.get("fields") or "main", bool(data.get("pair_test"))))
 
     @app.post("/api/compare/copy")
     def compare_copy():

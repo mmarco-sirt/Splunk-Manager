@@ -91,11 +91,13 @@ def write_backup(path, data):
     archive_version(path)
 
 
-def merge_backup(path, entries, key="name"):
+def merge_backup(path, entries, key="name", same=None):
     """
-    Añade 'entries' al backup de 'path' (lista JSON), sustituyendo los elementos con el mismo 'key', y lo guarda con su
-    historial. Lo usan los backups «antes de editar», que van acumulando lo que había antes de cada cambio.
+    Añade 'entries' al backup de 'path' (lista JSON), sustituyendo los elementos con el mismo 'key' (o los que
+    'same(anterior, nuevo)' considere el mismo), y lo guarda con su historial. Lo usan los backups «antes de editar», que
+    van acumulando lo que había antes de cada cambio.
     """
+    same = same or (lambda old, new: old.get(key) == new.get(key))
     with _merge_lock:
         existing = []
         if os.path.exists(path):
@@ -104,8 +106,8 @@ def merge_backup(path, entries, key="name"):
                     existing = json.load(f)
             except (OSError, ValueError):
                 existing = []
-        keys = {e.get(key) for e in entries}
-        kept = [e for e in existing if isinstance(e, dict) and e.get(key) not in keys] if isinstance(existing, list) else []
+        kept = [e for e in existing if isinstance(e, dict) and not any(same(e, new) for new in entries)] \
+            if isinstance(existing, list) else []
         write_backup(path, kept + entries)
 
 

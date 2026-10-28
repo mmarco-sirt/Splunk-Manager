@@ -4,6 +4,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from core.conventions import is_cu_alert
+from core.knowledge import ALL_NAMESPACES
 from web import services
 from web.explorer import oneshot_results
 from web.services import ClientError
@@ -29,9 +31,12 @@ def _flag(value):
 
 
 def _alerts(service):
-    """Recuento de alertas (incluidos casos de uso de ES) sin descargar toda su configuración."""
+    """
+    Recuento de alertas de todas las apps y usuarios (incluidos casos de uso de ES) sin descargar toda su configuración.
+    Los casos de uso CU- son los de producción: que la versión TEST de una alerta esté deshabilitada es lo normal.
+    """
     response = service.get("saved/searches", output_mode="json", count=0,
-                           f=["disabled", "alert_type", "is_scheduled", "tags"])
+                           f=["disabled", "alert_type", "is_scheduled", "tags"], **ALL_NAMESPACES)
     entries = json.loads(response.body.read().decode("utf-8")).get("entry", [])
     summary = {"total": 0, "disabled": 0, "cu_total": 0, "cu_disabled": 0, "es": 0}
     for entry in entries:
@@ -45,7 +50,7 @@ def _alerts(service):
         summary["total"] += 1
         summary["disabled"] += disabled
         summary["es"] += is_es
-        if entry.get("name", "").startswith("CU-"):
+        if is_cu_alert(entry.get("name"), include_test=False):
             summary["cu_total"] += 1
             summary["cu_disabled"] += disabled
     return summary

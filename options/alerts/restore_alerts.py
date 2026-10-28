@@ -4,8 +4,11 @@ import re
 from splunklib.binding import HTTPError
 
 from core.backup_files import choose_backup_file
+from core.knowledge import all_saved_searches, apply_sharing, pick_existing
 
 BACKUP_FOLDER = "alertas"
+# Con sharing=KEEP_SHARING las que ya existen conservan su compartición y las nuevas usan la del backup (o global)
+KEEP_SHARING = "keep"
 
 # Campos que Splunk devuelve al leer una saved search pero que no acepta al crear/actualizar.
 # Se descartan de antemano para no gastar reintentos en ellos.
@@ -23,12 +26,27 @@ def restore_alerts(service, file_path=None):
     restore_alerts_from_file(service, file_path)
 
 
+def _sharing_for(sharing, alert, is_update):
+    """Compartición que se aplica tras restaurar un elemento (None = no cambiarla)."""
+    if sharing != KEEP_SHARING:
+        return sharing
+    if is_update:
+        return None
+    kept = (alert.get("acl") or {}).get("sharing")
+    return "global" if kept in (None, "", "system") else kept
+
+
 def restore_alerts_from_file(service, backup_file, sharing="global"):
     """
     Restaura alertas desde un archivo JSON concreto, usando la lógica robusta de reintentos.
-    Si una alerta trae el campo 'app' (backups de Enterprise Security) se crea en esa app.
+    Si ya existe una saved search con ese nombre (en cualquier app o usuario) se actualiza esa misma: la de la app y el
+    propietario que guarda el backup ('acl') o, si no lo guarda, la compartida. Las nuevas que traen el campo 'app'
+    (backups de Enterprise Security) se crean en esa app.
     """
-    existing_alert_names = {s.name for s in service.saved_searches}
+    existing = {}
+    for s in all_saved_searches(service):
+        existing.setdefault(s.name, []).append(s)
+    user = getattr(service, "username", None)
     failed_alerts = []
     unnamed_counter = 1
 
@@ -57,16 +75,18 @@ def restore_alerts_from_file(service, backup_file, sharing="global"):
             }
 
             try:
-                if alert_name in existing_alert_names:
+                target = pick_existing(existing.get(alert_name, []), alert.get("acl"), user)
+                if target is not None:
                     print(f"Actualizando alerta: {alert_name}")
-                    create_or_update_alert(service, alert_name, filtered_content, is_update=True, sharing=sharing)
+                    create_or_update_alert(service, alert_name, filtered_content, is_update=True,
+                                           sharing=_sharing_for(sharing, alert, True), existing=target)
                     print(f"Alerta '{alert_name}' actualizada correctamente.\n")
                 else:
                     print(f"Creando alerta: {alert_name}")
-                    create_or_update_alert(service, alert_name, filtered_content, is_update=False,
-                                           app=alert.get("app"), sharing=sharing)
+                    created = create_or_update_alert(service, alert_name, filtered_content, is_update=False,
+                                                     app=alert.get("app"), sharing=_sharing_for(sharing, alert, False))
                     print(f"Alerta '{alert_name}' creada correctamente.\n")
-                    existing_alert_names.add(alert_name)
+                    existing.setdefault(alert_name, []).append(created)
             except Exception as e:
                 print(f"Error al procesar la alerta '{alert_name}': {e}\n")
                 failed_alerts.append(alert_name)
@@ -81,11 +101,14 @@ def restore_alerts_from_file(service, backup_file, sharing="global"):
     print(f"Restore completado desde {os.path.basename(backup_file)}")
 
 
-def create_or_update_alert(service, alert_name, attributes, is_update=False, app=None, sharing="global", max_retries=None):
+def create_or_update_alert(service, alert_name, attributes, is_update=False, app=None, sharing="global", max_retries=None,
+                           existing=None):
     """
-    Intenta crear o actualizar una alerta con los 'attributes' proporcionados.
+    Intenta crear o actualizar una alerta con los 'attributes' proporcionados (al actualizar, 'existing' es la saved
+    search concreta; si no se indica, la de ese nombre en el contexto del usuario conectado).
     Si Splunk rechaza algún campo, lo elimina y reintenta (por defecto, tantas veces como campos haya).
-    Si se indica 'app', la alerta nueva se crea en esa app. Al terminar aplica el 'sharing' indicado.
+    Si se indica 'app', la alerta nueva se crea en esa app. Al terminar aplica el 'sharing' indicado (None: no lo cambia).
+    Devuelve la saved search.
     """
     attributes = {k: v for k, v in attributes.items() if k not in READ_ONLY_FIELDS}
     if max_retries is None:
@@ -94,7 +117,7 @@ def create_or_update_alert(service, alert_name, attributes, is_update=False, app
     for _ in range(max_retries):
         try:
             if is_update:
-                saved_search = service.saved_searches[alert_name]
+                saved_search = existing if existing is not None else service.saved_searches[alert_name]
                 saved_search.update(**attributes)
             else:
                 params = dict(attributes)
@@ -117,14 +140,4 @@ def create_or_update_alert(service, alert_name, attributes, is_update=False, app
         raise Exception(f"No se pudo crear/actualizar la alerta '{alert_name}' tras {max_retries} reintentos.")
 
     apply_sharing(saved_search, sharing)
-
-
-def apply_sharing(saved_search, sharing):
-    """Aplica el nivel de compartición (user/app/global) manteniendo el propietario actual."""
-    if not sharing or saved_search.access.get("sharing") == sharing:
-        return
-    owner = saved_search.access.get("owner") or "nobody"
-    try:
-        saved_search.acl_update(sharing=sharing, owner=owner)
-    except Exception as e:
-        print(f" - [ADVERTENCIA] No se pudo aplicar sharing='{sharing}' a '{saved_search.name}': {e}")
+    return saved_search

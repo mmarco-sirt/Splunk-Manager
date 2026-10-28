@@ -32,6 +32,15 @@ function statusBadge(status, { compact = false } = {}) {
   return badge(compact && status === 'same' ? '=' : s.label, s.variant, compact && status === 'same' ? null : s.icon);
 }
 
+/** Fases de un caso de uso en un cliente al emparejar TEST y producción (solo producción no lleva etiqueta). */
+function phaseBadge(phases) {
+  if (!phases?.length || (phases.length === 1 && phases[0] === 'prod')) return null;
+  return phases.length === 2 ? badge('Prod + TEST', 'outline') : badge('Solo TEST', 'warn');
+}
+
+/** Nombre real del elemento en un cliente (al emparejar, la fila usa el nombre sin «TEST - »). */
+const realName = (item, client) => item.keys?.[client] ?? item.name;
+
 function summaryText(type, s) {
   if (!s) return '';
   switch (type) {
@@ -137,6 +146,7 @@ export default {
     let reference = names.includes(prefs.reference) ? prefs.reference : (state.client || names[0]);
     const targets = new Set((prefs.targets || []).filter((n) => names.includes(n) && n !== reference));
     let fields = prefs.fields === 'all' ? 'all' : 'main';
+    let pairTest = Boolean(prefs.pair);
     let result = null;
     let alive = true;
 
@@ -149,7 +159,7 @@ export default {
     const resultSlot = h('div');
     const runBtn = button('Comparar', { variant: 'primary', iconName: 'compare' });
 
-    const persist = () => savePrefs({ type, reference, targets: [...targets], fields });
+    const persist = () => savePrefs({ type, reference, targets: [...targets], fields, pair: pairTest });
 
     function renderType() {
       clear(typeSlot).append(segmented(Object.entries(types).map(([k, v]) => ({ value: k, label: v.label })), type, (v) => {
@@ -161,10 +171,17 @@ export default {
 
     function renderFields() {
       clear(fieldsSlot);
-      if (!types[type]?.has_main) return;
-      fieldsSlot.append(h('div', { class: 'field', style: { marginBottom: 0 } }, h('span', { class: 'field-label' }, 'Campos a comparar'),
-        h('div', {}, segmented([{ value: 'main', label: 'Principales' }, { value: 'all', label: 'Todos' }], fields, (v) => { fields = v; persist(); })),
-        h('span', { class: 'field-hint' }, 'Principales: SPL, programación, estado, disparo, severidad, supresión y acciones. Todos incluye también los parámetros de visualización.')));
+      if (types[type]?.has_main) {
+        fieldsSlot.append(h('div', { class: 'field', style: { marginBottom: 0 } }, h('span', { class: 'field-label' }, 'Campos a comparar'),
+          h('div', {}, segmented([{ value: 'main', label: 'Principales' }, { value: 'all', label: 'Todos' }], fields, (v) => { fields = v; persist(); })),
+          h('span', { class: 'field-hint' }, 'Principales: SPL, programación, estado, disparo, severidad, supresión y acciones. Todos incluye también los parámetros de visualización.')));
+      }
+      if (types[type]?.pair) {
+        fieldsSlot.append(h('div', { class: 'field', style: { marginBottom: 0, marginTop: '14px' } }, h('span', { class: 'field-label' }, 'Versiones TEST'),
+          h('div', {}, segmented([{ value: 'apart', label: 'Por separado' }, { value: 'pair', label: 'Emparejar TEST y producción' }],
+            pairTest ? 'pair' : 'apart', (v) => { pairTest = v === 'pair'; persist(); })),
+          h('span', { class: 'field-hint' }, 'Emparejar: «TEST - CU-X» y «CU-X» van en la misma fila, para ver en qué fase está cada cliente. En cada cliente se compara la misma fase que en la referencia (o la otra si no la tiene). Al copiar se usa siempre el nombre real.')));
+      }
     }
 
     function renderChips() {
@@ -190,7 +207,7 @@ export default {
       renderChips();
     });
 
-    async function run(params = { type, reference, targets: names.filter((n) => targets.has(n)), fields }) {
+    async function run(params = { type, reference, targets: names.filter((n) => targets.has(n)), fields, pair_test: pairTest }) {
       if (!params.targets.length) return;
       clear(resultSlot).append(h('div', { class: 'card' }, h('div', { class: 'card-body' },
         h('p', { class: 'status', style: { marginBottom: '12px' } }, h('span', { class: 'spinner' }),
@@ -227,11 +244,16 @@ export default {
 
       const statusColumns = r.targets.map((t) => ({
         key: `t:${t}`, label: t, sort: (item) => STATUS[item.status[t]]?.order ?? 9,
-        render: (item) => statusBadge(item.status[t], { compact: r.targets.length > 4 }),
+        render: (item) => {
+          const status = statusBadge(item.status[t], { compact: r.targets.length > 4 });
+          const phase = r.pair_test ? phaseBadge(item.phases?.[t]) : null;
+          return phase ? h('div', { class: 'badges' }, status, phase) : status;
+        },
       }));
 
       const filters = [{
         id: 'diff',
+        label: 'Mostrar',
         value: 'diff',
         options: [
           { value: 'diff', label: 'Con diferencias', test: (i) => Object.values(i.status).some((s) => NOT_SAME.includes(s)) },
@@ -242,13 +264,29 @@ export default {
           { value: 'all', label: 'Todos' },
         ],
       }];
-      if (r.type === 'alerts') {
+      if (types[r.type]?.pair) {
+        // Tipo: sin emparejar, la versión TEST es una fila aparte; al emparejar, la fase va en su propio filtro
         filters.push({
           id: 'kind',
+          label: 'Tipo',
           options: [
             { value: 'all', label: 'Todas' },
-            { value: 'cu', label: 'CU-', test: (i) => i.summary?.is_cu },
-            { value: 'es', label: 'ES', test: (i) => i.summary?.is_es },
+            r.pair_test
+              ? { value: 'cu', label: 'CU-', test: (i) => i.summary?.is_cu }
+              : { value: 'cu', label: 'CU-', title: 'Casos de uso en producción (CU-…)', test: (i) => i.summary?.is_cu && !i.summary?.is_test },
+            r.pair_test ? null : { value: 'test', label: 'TEST', title: 'Casos de uso en pruebas (TEST - CU-…)', test: (i) => i.summary?.is_test },
+            r.type === 'alerts' ? { value: 'es', label: 'ES', test: (i) => i.summary?.is_es } : null,
+          ].filter(Boolean),
+        });
+      }
+      if (r.pair_test) {
+        filters.push({
+          id: 'phase',
+          label: 'Fase',
+          options: [
+            { value: 'all', label: 'Todas' },
+            { value: 'pending', label: 'Solo en TEST en algún cliente', test: (i) => Object.values(i.phases || {}).some((p) => !p.includes('prod')) },
+            { value: 'prod', label: 'En producción donde existe', test: (i) => Object.values(i.phases || {}).every((p) => p.includes('prod')) },
           ],
         });
       }
@@ -271,16 +309,20 @@ export default {
             if (!inRef.length) { toast(`Ninguno de los seleccionados existe en ${r.reference}.`, 'warn'); return; }
             if (inRef.length < sel.length) toast(`${sel.length - inRef.length} seleccionados no existen en ${r.reference} y no se copiarán.`, 'warn');
             const needed = r.targets.filter((t) => !r.errors[t] && inRef.some((i) => ['missing', 'different'].includes(i.status[t])));
-            openCopyModal({ type: r.type, typeLabel, source: r.reference, names: inRef.map((i) => i.name),
+            openCopyModal({ type: r.type, typeLabel, source: r.reference, names: inRef.map((i) => realName(i, r.reference)),
               targets: r.targets.filter((t) => !r.errors[t]), preselected: needed });
           },
         }] : [],
         columns: [
           {
             key: 'name', label: 'Nombre',
-            render: (i) => h('div', { style: { minWidth: '220px', maxWidth: '460px' } },
-              h('div', { class: 'cell-main' }, i.name, !i.in_reference ? h('span', { class: 'muted' }, ` · no está en ${r.reference}`) : null),
-              h('div', { class: 'cell-sub truncate' }, summaryText(r.type, i.summary))),
+            render: (i) => {
+              const tag = r.pair_test ? phaseBadge(i.phases?.[r.reference]) : (i.summary?.is_test ? badge('TEST', 'warn') : null);
+              tag?.classList.add('name-badge');
+              return h('div', { style: { minWidth: '220px', maxWidth: '460px' } },
+                h('div', { class: 'cell-main' }, i.name, tag, !i.in_reference ? h('span', { class: 'muted' }, ` · no está en ${r.reference}`) : null),
+                h('div', { class: 'cell-sub truncate' }, summaryText(r.type, i.summary)));
+            },
           },
           ...statusColumns,
         ],
@@ -300,10 +342,15 @@ export default {
       const r = result;
       const copyBtn = (source, dest) => button(`Copiar de ${source} a ${dest}`, {
         size: 'sm', iconName: 'copy',
-        onClick: () => openCopyModal({ type: r.type, typeLabel: r.label, source, names: [item.name], targets: [dest], preselected: [dest] }),
+        onClick: () => openCopyModal({ type: r.type, typeLabel: r.label, source, names: [realName(item, source)], targets: [dest], preselected: [dest] }),
       });
       const blocks = r.targets.map((t) => {
         const status = item.status[t];
+        // Al emparejar, puede que se comparen la versión TEST de un cliente y la de producción del otro
+        const refName = item.keys?.[r.reference];
+        const targetName = item.keys?.[t];
+        const crossed = refName && targetName && refName !== targetName
+          ? infoBox(`Se compara «${refName}» de ${r.reference} con «${targetName}» de ${t}.`) : null;
         let content;
         if (status === 'different') content = fieldDiffs(item.fields[t], r.reference, t);
         else if (status === 'missing') content = h('p', { class: 'muted' }, `Existe en ${r.reference} pero no en ${t}.`);
@@ -315,8 +362,9 @@ export default {
         if (r.can_copy && ['different', 'missing'].includes(status)) actions.push(copyBtn(r.reference, t));
         if (r.can_copy && status === 'extra') actions.push(copyBtn(t, r.reference));
         return h('div', { class: 'compare-block' },
-          h('div', { class: 'compare-block-head' }, h('strong', {}, t), statusBadge(status), h('div', { style: { flex: 1 } }), actions),
-          content);
+          h('div', { class: 'compare-block-head' }, h('strong', {}, t), statusBadge(status), r.pair_test ? phaseBadge(item.phases?.[t]) : null,
+            h('div', { style: { flex: 1 } }), actions),
+          crossed, content);
       });
       openDrawer({
         title: item.name,
@@ -356,7 +404,7 @@ export default {
       const involved = new Set([result.reference, ...result.targets]);
       if (job.clients.some((c) => involved.has(c))) {
         toast('Copia terminada: actualizando la comparación…', 'info');
-        run({ type: result.type, reference: result.reference, targets: result.targets, fields: result.fields });
+        run({ type: result.type, reference: result.reference, targets: result.targets, fields: result.fields, pair_test: result.pair_test });
       }
     });
     return () => { alive = false; off(); };

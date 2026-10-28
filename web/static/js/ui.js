@@ -222,6 +222,7 @@ export function segmented(options, value, onChange) {
     for (const opt of options) {
       el.append(h('button', {
         type: 'button', role: 'tab', class: opt.value === current ? 'active' : '', 'aria-selected': String(opt.value === current),
+        title: (typeof opt.title === 'function' ? opt.title() : opt.title) || null,
         onclick: () => { render(opt.value); onChange(opt.value); },
       }, opt.label, opt.count !== undefined && h('span', { class: 'seg-count' }, fmtNum(opt.count))));
     }
@@ -433,7 +434,8 @@ export function openDrawer({ title, subtitle, actions, body, width }) {
 /**
  * Tabla con búsqueda, filtros segmentados, ordenación, selección múltiple y paginación incremental.
  * columns: [{ key, label, render(row), sort(row), className, sortable }]
- * filters: [{ id, value, options: [{ value, label, test(row) }] }]
+ * filters: [{ id, label, value, options: [{ value, label, title, test(row) }] }]
+ * Los filtros se combinan (se aplican todos a la vez). Si tienen 'label', van en su propia fila con su etiqueta.
  */
 export class DataTable {
   constructor(opts) {
@@ -470,12 +472,17 @@ export class DataTable {
       seg.filterDef = f;
       return seg;
     });
+    const labelled = o.filters.some((f) => f.label);
+    const filterGroups = this.filterEls.map((seg) => (seg.filterDef.label
+      ? h('div', { class: 'filter-group' }, h('span', { class: 'filter-label' }, seg.filterDef.label), seg)
+      : seg));
     this.toolbar = h('div', { class: 'toolbar' },
       h('label', { class: 'search-input' }, icon('search'), this.searchInput),
-      this.filterEls,
+      labelled ? null : filterGroups,
       h('div', { class: 'toolbar-spacer' }),
       this.countEl,
-      o.toolbarExtra);
+      o.toolbarExtra,
+      labelled ? h('div', { class: 'toolbar-filters' }, filterGroups) : null);
     this.selectionBar = h('div', { class: 'selection-bar', hidden: true });
     this.headCheck = o.selectable ? h('input', { type: 'checkbox', 'aria-label': 'Seleccionar todo', onchange: () => this.toggleAll() }) : null;
     this.thead = h('thead');

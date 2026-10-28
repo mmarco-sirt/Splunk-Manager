@@ -5,6 +5,7 @@ Antes de cambiar nada se guarda su configuración en el backup «antes_de_editar
 import fnmatch
 import os
 
+from core.knowledge import all_saved_searches
 from options.alerts.backup_alerts import backup_before_edit
 
 
@@ -26,9 +27,12 @@ def matches(name, pattern):
 
 
 def find_saved_searches(service, patterns):
-    """Saved searches que coinciden con algún patrón. Devuelve (encontradas, patrones sin ninguna coincidencia)."""
+    """
+    Saved searches (de todas las apps y usuarios) que coinciden con algún patrón. Devuelve (encontradas, patrones sin
+    ninguna coincidencia).
+    """
     found, matched = [], set()
-    for s in service.saved_searches:
+    for s in all_saved_searches(service):
         hits = [p for p in patterns if matches(s.name, p)]
         if hits:
             found.append(s)

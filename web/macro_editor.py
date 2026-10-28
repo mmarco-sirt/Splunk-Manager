@@ -8,8 +8,7 @@ puede deshacer restaurando ese archivo (o solo algunas de sus macros).
 import os
 import re
 
-from splunklib.binding import namespace
-
+from core.knowledge import find_macro, reload_macro
 from options.macros.backup_macros import backup_before_edit
 from web.alert_editor import EditError, as_text
 from web.explorer import macro_row
@@ -21,10 +20,10 @@ ARG_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 ARGS_IN_NAME = re.compile(r"\((\d+)\)$")
 
 
-def get_macro(service, name, app=None, owner=None):
-    """Macro por nombre (en su app/propietario si se indican). KeyError si no existe."""
+def get_macro(service, name, app=None, owner=None, sharing=None):
+    """Macro por nombre (en su app/propietario/compartición si se indican). KeyError si no existe."""
     if app and owner:
-        return service.macros[name, namespace(owner=owner, app=app)]
+        return find_macro(service, name, app, owner, sharing)
     return service.macros[name]
 
 
@@ -86,26 +85,27 @@ def effective_changes(m, changes):
 
 
 def apply_changes(m, effective):
+    """Aplica los cambios en Splunk y devuelve la macro leída de nuevo."""
     values = dict(effective)
     definition = values.pop("definition", None)
     m.update(definition=definition, **values)   # Splunk exige la definición: sin ella se envía la actual
-    m.refresh()
+    return reload_macro(m)
 
 
-def macro_detail(service, name, app, owner):
+def macro_detail(service, name, app, owner, sharing=None):
     """Configuración editable de una macro."""
-    m = get_macro(service, name, app, owner)
+    m = get_macro(service, name, app, owner, sharing)
     return {"row": macro_row(m), "content": {k: _current(m, k) for k in EDITABLE}, "expected_args": expected_args(m.name)}
 
 
-def update_macro(service, name, app, owner, changes):
+def update_macro(service, name, app, owner, changes, sharing=None):
     """Modifica los campos indicados de una macro guardando antes su configuración anterior."""
-    m = get_macro(service, name, app, owner)
+    m = get_macro(service, name, app, owner, sharing)
     effective = effective_changes(m, validate_changes(m.name, changes))
     if not effective:
         return {"changed": [], "row": macro_row(m), "message": "No había nada que cambiar."}
     path = backup_before_edit(service, [m])
-    apply_changes(m, effective)
+    m = apply_changes(m, effective)
     return {
         "changed": sorted(effective),
         "row": macro_row(m),
@@ -115,13 +115,13 @@ def update_macro(service, name, app, owner, changes):
 
 
 def bulk_update(service, items, changes):
-    """Aplica los mismos cambios (p. ej. habilitar o deshabilitar) a varias macros ([{name, app, owner}])."""
+    """Aplica los mismos cambios (p. ej. habilitar o deshabilitar) a varias macros ([{name, app, owner, sharing}])."""
     if not items:
         raise EditError("No se ha seleccionado ninguna macro.")
     results, pending = [], []
     for item in items:
         try:
-            m = get_macro(service, item.get("name"), item.get("app"), item.get("owner"))
+            m = get_macro(service, item.get("name"), item.get("app"), item.get("owner"), item.get("sharing"))
         except KeyError:
             results.append({"name": item.get("name"), "ok": False, "error": "No existe."})
             continue
@@ -138,7 +138,7 @@ def bulk_update(service, items, changes):
     path = backup_before_edit(service, [m for m, _ in pending]) if pending else None
     for m, effective in pending:
         try:
-            apply_changes(m, effective)
+            m = apply_changes(m, effective)
             results.append({"name": m.name, "ok": True, "changed": sorted(effective), "row": macro_row(m)})
         except Exception as e:
             results.append({"name": m.name, "ok": False, "error": str(e)})

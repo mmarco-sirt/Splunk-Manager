@@ -7,7 +7,8 @@ import {
 } from '../ui.js';
 import { columnChart, sparkline } from '../charts.js';
 import { openEditor, openBulkEditor, setEnabled, mergeRows, describeCron } from '../alert-editor.js';
-import { editInClients } from './savedsearches.js';
+import { editInClients, testBadge } from './savedsearches.js';
+import { alertKindFilter } from '../filters.js';
 
 const PREFS_KEY = 'sm.alertAnalysis';
 const THRESHOLDS = [2, 5, 10, 24, 50];
@@ -97,7 +98,7 @@ function trendCell(a) {
 
 function nameCell(a, sub) {
   return h('div', { style: { minWidth: '220px', maxWidth: '440px' } },
-    h('div', { class: 'cell-main' }, a.name),
+    h('div', { class: 'cell-main' }, a.name, testBadge(a, { inline: true })),
     h('div', { class: 'cell-sub truncate' }, sub || [a.app, a.es_label].filter(Boolean).join(' · ')));
 }
 
@@ -228,7 +229,7 @@ export default {
           button('En varios clientes…', { iconName: 'layers', size: 'sm', onClick: () => { drawer.close(); editInClients([a]); } }),
         ],
         body: [
-          h('div', { class: 'badges', style: { marginBottom: '14px' } }, badge(...STATE_UI[s.state]), a.is_es ? badge('Enterprise Security', 'accent') : null),
+          h('div', { class: 'badges', style: { marginBottom: '14px' } }, badge(...STATE_UI[s.state]), testBadge(a), a.is_es ? badge('Enterprise Security', 'accent') : null),
           notes,
           section('Ejecuciones', kv([
             ['Ejecuciones', `${fmtNum(s.runs)}${s.expected !== null && s.expected !== undefined ? ` (su cron indica ~${fmtNum(s.expected)} en los días completos)` : ''}`],
@@ -316,6 +317,7 @@ export default {
         empty: ['No hay alertas', ''],
         filters: [{
           id: 'state',
+          label: 'Estado',
           options: [
             { value: 'all', label: 'Todas' },
             { value: 'active', label: 'Activas', test: (a) => a.stats.state === 'active' },
@@ -380,12 +382,12 @@ export default {
         const t = TABS[tab];
         const table = new DataTable({
           rows: t.rows(),
-          rowKey: (a) => `${a.app}/${a.owner}/${a.name}`,
+          rowKey: (a) => `${a.app}/${a.owner}/${a.sharing}/${a.name}`,
           selectable: true,
           compact: true,
           searchText: (a) => `${a.name} ${a.app} ${a.es_label}`,
           searchPlaceholder: 'Buscar alerta…',
-          filters: t.filters || [],
+          filters: [alertKindFilter, ...(t.filters || [])],
           initialSort: t.sort,
           emptyIcon: 'checkCircle',
           emptyTitle: t.empty[0],

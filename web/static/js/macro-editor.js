@@ -2,6 +2,7 @@
 import { get, post } from './api.js';
 import { state } from './core.js';
 import { h, append, clear, openModal, toast, infoBox, loadingRows, errorBox, fmtNum } from './ui.js';
+import { ownerText } from './alert-editor.js';
 
 const LABELS = {
   disabled: 'Habilitada', definition: 'Definición', args: 'Argumentos', iseval: 'Es una expresión eval',
@@ -9,13 +10,16 @@ const LABELS = {
 };
 const BOOLEAN = ['disabled', 'iseval'];
 
+/** Identifica una macro en la API: puede haber varias con el mismo nombre en distintas apps o de distintos usuarios. */
+const macroRef = (m) => ({ name: m.name, app: m.app, owner: m.owner, sharing: m.sharing });
+
 /**
  * Abre el editor de una macro. onSaved(row) recibe la fila actualizada (mismo formato que el listado).
  */
 export async function openMacroEditor(row, { onSaved } = {}) {
   const modal = openModal({
     title: `Editar ${row.name}`,
-    subtitle: `${state.client} · ${[row.app, row.owner].filter(Boolean).join(' / ')}`,
+    subtitle: `${state.client} · ${[row.app, ownerText(row)].filter(Boolean).join(' / ')}`,
     size: 'lg',
     body: loadingRows(8),
     actions: [{ label: 'Cancelar' }],
@@ -23,7 +27,7 @@ export async function openMacroEditor(row, { onSaved } = {}) {
 
   let detail;
   try {
-    detail = await get('/api/splunk/macros/detail', { client: state.client, name: row.name, app: row.app, owner: row.owner });
+    detail = await get('/api/splunk/macros/detail', { client: state.client, ...macroRef(row) });
   } catch (e) {
     clear(modal.body).append(errorBox(e.message));
     return;
@@ -112,7 +116,7 @@ export async function openMacroEditor(row, { onSaved } = {}) {
         label: `Guardar ${keys.length} ${keys.length === 1 ? 'cambio' : 'cambios'} en Splunk`, variant: 'primary', icon: 'save',
         onClick: async () => {
           const changes = Object.fromEntries(keys.map((k) => [k, values[k] ?? '']));
-          const result = await post('/api/splunk/macros/update', { client: state.client, name: row.name, app: row.app, owner: row.owner, changes });
+          const result = await post('/api/splunk/macros/update', { client: state.client, ...macroRef(row), changes });
           toast(`${result.message}${result.backup?.length ? ' Configuración anterior guardada en Backups.' : ''}`, 'success');
           onSaved?.(result.row);
         },
@@ -129,7 +133,7 @@ export async function openMacroEditor(row, { onSaved } = {}) {
  */
 export async function setMacrosEnabled(rows, enabled) {
   const result = await post('/api/splunk/macros/bulk-update', {
-    client: state.client, items: rows.map((r) => ({ name: r.name, app: r.app, owner: r.owner })), changes: { disabled: enabled ? '0' : '1' },
+    client: state.client, items: rows.map(macroRef), changes: { disabled: enabled ? '0' : '1' },
   });
   const done = enabled ? 'habilitada' : 'deshabilitada';
   if (rows.length === 1 && result.updated) toast(`«${rows[0].name}» ${done}`, 'success');

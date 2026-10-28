@@ -4,6 +4,13 @@ import { state } from './core.js';
 import { h, append, clear, icon, button, badge, openModal, toast, infoBox, loadingRows, errorBox, fmtNum } from './ui.js';
 
 export const SEVERITY_OPTIONS = [['1', 'Debug'], ['2', 'Info'], ['3', 'Baja'], ['4', 'Media'], ['5', 'Alta'], ['6', 'Crítica']];
+export const SHARING_LABELS = { global: 'Global', app: 'Solo en su app', user: 'Privada', system: 'Sistema' };
+
+/** Identifica una saved search en la API: puede haber varias con el mismo nombre en distintas apps o de distintos usuarios. */
+export const savedSearchRef = (r) => ({ name: r.name, app: r.app, owner: r.owner, sharing: r.sharing });
+
+/** «propietario · compartición» de una saved search. */
+export const ownerText = (r) => [r.owner, SHARING_LABELS[r.sharing] || r.sharing].filter(Boolean).join(' · ');
 
 const CRON_PRESETS = [
   ['*/5 * * * *', 'Cada 5 minutos'], ['*/15 * * * *', 'Cada 15 minutos'], ['*/30 * * * *', 'Cada 30 minutos'],
@@ -137,7 +144,7 @@ function actionList(value) {
 export async function openEditor(row, { onSaved } = {}) {
   const modal = openModal({
     title: `Editar ${row.name}`,
-    subtitle: `${state.client} · ${[row.app, row.owner].filter(Boolean).join(' / ')}`,
+    subtitle: `${state.client} · ${[row.app, ownerText(row)].filter(Boolean).join(' / ')}`,
     size: 'xl',
     body: loadingRows(10),
     actions: [{ label: 'Cancelar' }],
@@ -145,7 +152,7 @@ export async function openEditor(row, { onSaved } = {}) {
 
   let detail;
   try {
-    detail = await get('/api/splunk/saved-searches/detail', { client: state.client, name: row.name, app: row.app, owner: row.owner });
+    detail = await get('/api/splunk/saved-searches/detail', { client: state.client, ...savedSearchRef(row) });
   } catch (e) {
     clear(modal.body).append(errorBox(e.message));
     return;
@@ -365,9 +372,7 @@ export async function openEditor(row, { onSaved } = {}) {
         label: `Guardar ${keys.length} ${keys.length === 1 ? 'cambio' : 'cambios'} en Splunk`, variant: 'primary', icon: 'save',
         onClick: async () => {
           const changes = Object.fromEntries(keys.map((k) => [k, values[k] ?? '']));
-          const result = await post('/api/splunk/saved-searches/update', {
-            client: state.client, name: row.name, app: row.app, owner: row.owner, changes,
-          });
+          const result = await post('/api/splunk/saved-searches/update', { client: state.client, ...savedSearchRef(row), changes });
           toast(`${result.message}${result.backup?.length ? ' Configuración anterior guardada en Backups.' : ''}`, 'success');
           onSaved?.(result.row);
         },
@@ -380,10 +385,10 @@ export async function openEditor(row, { onSaved } = {}) {
 
 // --- Habilitar / deshabilitar ------------------------------------------------------------
 
-/** Copia en 'rows' los datos actualizados (mismo nombre, app y propietario). */
+/** Copia en 'rows' los datos actualizados (mismo nombre, app, propietario y compartición). */
 export function mergeRows(rows, updated) {
   for (const u of updated) {
-    const row = rows.find((r) => r.name === u.name && r.app === u.app && r.owner === u.owner);
+    const row = rows.find((r) => r.name === u.name && r.app === u.app && r.owner === u.owner && r.sharing === u.sharing);
     if (row) Object.assign(row, u);
   }
 }
@@ -394,7 +399,7 @@ export function mergeRows(rows, updated) {
  */
 export async function setEnabled(rows, enabled) {
   const result = await post('/api/splunk/saved-searches/bulk-update', {
-    client: state.client, items: rows.map((r) => ({ name: r.name, app: r.app, owner: r.owner })), changes: { disabled: enabled ? '0' : '1' },
+    client: state.client, items: rows.map(savedSearchRef), changes: { disabled: enabled ? '0' : '1' },
   });
   const done = enabled ? 'habilitada' : 'deshabilitada';
   if (rows.length === 1 && result.updated) toast(`«${rows[0].name}» ${done}`, 'success');
@@ -473,9 +478,7 @@ export function openBulkEditor(rows, { onSaved } = {}) {
             if (line.key in changes) throw new Error(`El campo ${line.key} está repetido.`);
             changes[line.key] = line.value;
           }
-          const result = await post('/api/splunk/saved-searches/bulk-update', {
-            client: state.client, items: rows.map((r) => ({ name: r.name, app: r.app, owner: r.owner })), changes,
-          });
+          const result = await post('/api/splunk/saved-searches/bulk-update', { client: state.client, items: rows.map(savedSearchRef), changes });
           onSaved?.(result.results.filter((r) => r.ok).map((r) => r.row));
           const parts = [`${fmtNum(result.updated)} modificadas`];
           if (result.unchanged) parts.push(`${fmtNum(result.unchanged)} ya tenían ese valor`);

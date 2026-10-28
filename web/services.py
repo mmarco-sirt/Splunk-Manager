@@ -9,7 +9,7 @@ from core.clients import (
 from core.connection import auth_methods, connect_to_splunk
 from web.jobs import capture_output
 
-CLIENT_FIELDS = ("name", "host", "username", "password", "splunkToken")
+CLIENT_FIELDS = ("name", "host", "username", "password", "splunkToken", "sirt_app")
 
 _services = {}   # nombre de cliente -> {"service", "connected_at", "info", "method"}
 _connect_locks = {}
@@ -34,6 +34,7 @@ def public_client(client):
         "auth": preferred_auth(client) if methods else "none",   # método preferido
         "methods": methods,                                       # métodos configurados, el preferido primero
         "credential_problems": credential_problems(client),      # credenciales que no se pueden descifrar
+        "sirt_app": client.get("sirt_app", ""),                   # app de SIRT si en este cliente tiene otro nombre
         "connected": conn is not None,
         "connected_at": conn["connected_at"] if conn else None,
         "connected_with": conn["method"] if conn else None,
@@ -181,10 +182,11 @@ def update_client(name, data):
         raise ClientError(f"Ya existe un cliente con el nombre '{changes['name']}'.")
 
     current["name"], current["host"] = changes["name"], changes["host"]
-    if changes.get("username"):
-        current["username"] = changes["username"]
-    else:
-        current.pop("username", None)
+    for field in ("username", "sirt_app"):
+        if changes.get(field):
+            current[field] = changes[field]
+        else:
+            current.pop(field, None)
     for field, clear_flag in (("password", "clear_password"), ("splunkToken", "clear_token")):
         if data.get(clear_flag):
             current.pop(field, None)

@@ -8,6 +8,7 @@ así que cualquier cambio se puede deshacer restaurando ese archivo (o solo algu
 import os
 import re
 
+from core.knowledge import reload_saved_search
 from options.alerts.backup_alerts import backup_before_edit
 from options.alerts.restore_alerts import READ_ONLY_FIELDS
 from web.explorer import saved_search, saved_search_row
@@ -99,7 +100,10 @@ def effective_changes(s, changes):
 
 
 def apply_changes(s, effective):
-    """Aplica los cambios en Splunk (el estado habilitado/deshabilitado tiene su propia llamada)."""
+    """
+    Aplica los cambios en Splunk (el estado habilitado/deshabilitado tiene su propia llamada). Devuelve la saved search
+    leída de nuevo.
+    """
     values = dict(effective)
     disabled = values.pop("disabled", None)
     if values:
@@ -109,12 +113,12 @@ def apply_changes(s, effective):
             s.disable()
         else:
             s.enable()
-    s.refresh()
+    return reload_saved_search(s)
 
 
-def saved_search_detail(service, name, app, owner):
+def saved_search_detail(service, name, app, owner, sharing=None):
     """Configuración completa (editable) de una saved search."""
-    s = saved_search(service, name, app, owner)
+    s = saved_search(service, name, app, owner, sharing)
     content = {k: as_text(v) for k, v in s.content.items() if not _hidden(k)}
     return {
         "row": saved_search_row(s),
@@ -123,15 +127,15 @@ def saved_search_detail(service, name, app, owner):
     }
 
 
-def update_saved_search(service, name, app, owner, changes):
+def update_saved_search(service, name, app, owner, changes, sharing=None):
     """Modifica los campos indicados de una saved search guardando antes su configuración anterior."""
     changes = validate_changes(changes)
-    s = saved_search(service, name, app, owner)
+    s = saved_search(service, name, app, owner, sharing)
     effective = effective_changes(s, changes)
     if not effective:
         return {"changed": [], "row": saved_search_row(s), "message": "No había nada que cambiar."}
     backups = backup_before_edit(service, [s])
-    apply_changes(s, effective)
+    s = apply_changes(s, effective)
     return {
         "changed": sorted(effective),
         "row": saved_search_row(s),
@@ -141,14 +145,14 @@ def update_saved_search(service, name, app, owner, changes):
 
 
 def bulk_update(service, items, changes):
-    """Aplica los mismos cambios a varias saved searches ([{name, app, owner}]). Devuelve el resultado de cada una."""
+    """Aplica los mismos cambios a varias saved searches ([{name, app, owner, sharing}]). Devuelve el resultado de cada una."""
     changes = validate_changes(changes)
     if not items:
         raise EditError("No se ha seleccionado ninguna saved search.")
     results, pending = [], []
     for item in items:
         try:
-            s = saved_search(service, item.get("name"), item.get("app"), item.get("owner"))
+            s = saved_search(service, item.get("name"), item.get("app"), item.get("owner"), item.get("sharing"))
         except KeyError:
             results.append({"name": item.get("name"), "ok": False, "error": "No existe."})
             continue
@@ -161,7 +165,7 @@ def bulk_update(service, items, changes):
     backups = backup_before_edit(service, [s for s, _ in pending]) if pending else []
     for s, effective in pending:
         try:
-            apply_changes(s, effective)
+            s = apply_changes(s, effective)
             results.append({"name": s.name, "ok": True, "changed": sorted(effective), "row": saved_search_row(s)})
         except Exception as e:
             results.append({"name": s.name, "ok": False, "error": str(e)})

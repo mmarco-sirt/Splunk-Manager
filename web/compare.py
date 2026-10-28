@@ -13,6 +13,8 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 from core.backup_files import VOLATILE_FIELDS, write_backup
+from core.conventions import is_cu_alert, is_test_alert, strip_test_prefix
+from core.knowledge import acl_of, all_macros, all_saved_searches
 from core.paths import backup_dir, host_tag
 from options.alerts.backup_alerts import _is_alert, _is_es_use_case
 from options.alerts.restore_alerts import READ_ONLY_FIELDS
@@ -60,37 +62,72 @@ def _unique_key(items, name, app):
 
 # --- Lectura de cada tipo de objeto ---------------------------------------------
 
+def _object_key(items, obj):
+    """El nombre; si se repite, con su app. Las privadas llevan su propietario («CU-X [privada de juan]»)."""
+    access = obj.access
+    name = obj.name if access.get("sharing") != "user" else f"{obj.name} [privada de {access.get('owner')}]"
+    return _unique_key(items, name, access.get("app"))
+
+
 def _saved_searches(service, alerts):
     items = {}
-    for s in service.saved_searches:
+    for s in all_saved_searches(service):
         is_alert = _is_alert(s) or _is_es_use_case(s)
         if is_alert != alerts:
             continue
         c = s.content
-        app = s.access.get("app")
-        entry = {"name": s.name, "content": dict(c)}
+        acl = acl_of(s)
+        entry = {"name": s.name, "content": dict(c), "acl": acl}
         if _is_es_use_case(s):
-            entry["app"] = app
-        items[_unique_key(items, s.name, app)] = {
+            entry["app"] = acl["app"]
+        items[_object_key(items, s)] = {
             "entry": entry,
             "compare": {k: _text(v) for k, v in c.items() if not k.startswith("eai:") and k not in IGNORED_SAVED_SEARCH_FIELDS},
-            "summary": {"app": app, "disabled": _flag(c.get("disabled")), "scheduled": _flag(c.get("is_scheduled")),
-                        "cron": c.get("cron_schedule") or "", "is_es": _is_es_use_case(s), "is_cu": s.name.startswith("CU-")},
+            "summary": {**acl, "disabled": _flag(c.get("disabled")), "scheduled": _flag(c.get("is_scheduled")),
+                        "cron": c.get("cron_schedule") or "", "is_es": _is_es_use_case(s), "is_cu": is_cu_alert(s.name),
+                        "is_test": is_test_alert(s.name)},
         }
     return items
 
 
+def _phase_groups(items):
+    """{clave sin «TEST - »: {"prod": clave, "test": clave}} de las saved searches de un cliente."""
+    groups = {}
+    for key in sorted(items):
+        base = strip_test_prefix(key)
+        groups.setdefault(base, {}).setdefault("test" if base != key else "prod", key)
+    return groups
+
+
+def pair_test_versions(data, reference):
+    """
+    Junta en una sola fila la versión TEST («TEST - CU-X») y la de producción («CU-X») de cada caso de uso. En cada cliente
+    se compara la misma fase que tiene la referencia (la de producción si tiene las dos) o, si ese cliente no la tiene,
+    la otra. Devuelve {cliente: {clave sin «TEST - »: objeto}} y cada objeto lleva su clave real ('key') y las fases que
+    hay en ese cliente ('phases').
+    """
+    groups = {client: _phase_groups(items) for client, items in data.items()}
+    reference_phase = {base: "prod" if "prod" in g else "test" for base, g in groups.get(reference, {}).items()}
+    paired = {}
+    for client, items in data.items():
+        paired[client] = {}
+        for base, g in groups[client].items():
+            wanted = reference_phase.get(base, "prod")
+            phase = wanted if wanted in g else next(iter(g))
+            paired[client][base] = {**items[g[phase]], "key": g[phase], "phases": [p for p in ("prod", "test") if p in g]}
+    return paired
+
+
 def _macros(service):
     items = {}
-    for m in service.macros:
+    for m in all_macros(service):
         c = m.content
-        app = m.access.get("app")
-        items[_unique_key(items, m.name, app)] = {
+        items[_object_key(items, m)] = {
             "entry": macro_entry(m),   # incluye iseval, estado y descripción para que la copia funcione igual
             "compare": {"definition": _text(c.get("definition")), "args": _text(c.get("args")),
                         "iseval": _text(c.get("iseval")), "disabled": _text(c.get("disabled")),
                         "description": _text(c.get("description"))},
-            "summary": {"app": app, "disabled": _flag(c.get("disabled")), "definition": (c.get("definition") or "")[:160]},
+            "summary": {**acl_of(m), "disabled": _flag(c.get("disabled")), "definition": (c.get("definition") or "")[:160]},
         }
     return items
 
@@ -157,8 +194,10 @@ def _users(service):
 
 
 TYPES = {
-    "alerts": {"label": "Alertas", "fetch": lambda svc: _saved_searches(svc, True), "folder": "alertas", "main": MAIN_SAVED_SEARCH_FIELDS},
-    "reports": {"label": "Reportes", "fetch": lambda svc: _saved_searches(svc, False), "folder": "reportes", "main": MAIN_SAVED_SEARCH_FIELDS},
+    "alerts": {"label": "Alertas", "fetch": lambda svc: _saved_searches(svc, True), "folder": "alertas", "main": MAIN_SAVED_SEARCH_FIELDS,
+               "pair": True},
+    "reports": {"label": "Reportes", "fetch": lambda svc: _saved_searches(svc, False), "folder": "reportes", "main": MAIN_SAVED_SEARCH_FIELDS,
+                "pair": True},
     "macros": {"label": "Macros", "fetch": _macros, "folder": "macros"},
     "dashboards": {"label": "Dashboards", "fetch": _dashboards, "folder": "dashboards"},
     "roles": {"label": "Roles", "fetch": _roles, "folder": "roles"},
@@ -169,7 +208,8 @@ TYPES = {
 
 
 def types_meta():
-    return {k: {"label": v["label"], "copy": bool(v["folder"]), "has_main": bool(v.get("main"))} for k, v in TYPES.items()}
+    return {k: {"label": v["label"], "copy": bool(v["folder"]), "has_main": bool(v.get("main")), "pair": bool(v.get("pair"))}
+            for k, v in TYPES.items()}
 
 
 def _type(kind):
@@ -198,21 +238,26 @@ def _fetch_all(kind, names):
     return data, errors
 
 
-def compare_clients(kind, reference, targets, fields="main"):
+def compare_clients(kind, reference, targets, fields="main", pair_test=False):
     """
     Compara 'reference' con cada cliente de 'targets'. Estado de cada objeto en cada cliente:
     same (igual), different (con diferencias), missing (falta en el cliente), extra (solo en el cliente, no en la
     referencia), absent (ni en la referencia ni en ese cliente) o error (no se pudo leer el cliente).
+    Con pair_test (alertas y reportes) la versión TEST y la de producción de cada caso de uso van en la misma fila; cada
+    elemento lleva entonces el nombre real en cada cliente ('keys', para copiar) y las fases que hay en él ('phases').
     """
     spec = _type(kind)
     targets = [t for t in dict.fromkeys(targets) if t and t != reference]
     if not reference or not targets:
         raise OperationError("Elija un cliente de referencia y al menos otro cliente para comparar.")
     main = spec.get("main") if fields == "main" else None
+    pair_test = bool(pair_test and spec.get("pair"))
 
     data, errors = _fetch_all(kind, [reference] + targets)
     if reference in errors:
         raise OperationError(f"No se pudo leer {reference}: {errors[reference]}")
+    if pair_test:
+        data = pair_test_versions(data, reference)
     ref = data[reference]
 
     def projected(item):
@@ -228,6 +273,10 @@ def compare_clients(kind, reference, targets, fields="main"):
         in_ref = key in ref
         source = ref.get(key) or next(data[t][key] for t in targets if key in data.get(t, {}))
         item = {"name": key, "in_reference": in_ref, "summary": source["summary"], "status": {}, "fields": {}}
+        if pair_test:
+            present = [c for c in [reference] + targets if key in data.get(c, {})]
+            item["keys"] = {c: data[c][key]["key"] for c in present}
+            item["phases"] = {c: data[c][key]["phases"] for c in present}
         for target in targets:
             if target in errors:
                 item["status"][target] = "error"
@@ -251,7 +300,7 @@ def compare_clients(kind, reference, targets, fields="main"):
 
     return {
         "type": kind, "label": spec["label"], "reference": reference, "targets": targets, "fields": fields,
-        "can_copy": bool(spec["folder"]), "errors": errors, "counts": counts, "items": items,
+        "pair_test": pair_test, "can_copy": bool(spec["folder"]), "errors": errors, "counts": counts, "items": items,
     }
 
 

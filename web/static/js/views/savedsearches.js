@@ -1,14 +1,92 @@
-// Alertas y reportes (saved searches): listado en vivo, detalle, edición, habilitar/deshabilitar, ejecutar, backup y restore.
-import { post } from '../api.js';
+// Alertas y reportes (saved searches): listado en vivo, detalle, dependencias, edición, habilitar/deshabilitar, ejecutar,
+// backup y restore.
+import { get, post } from '../api.js';
 import { state, loadResource, cachedAt, navigate } from '../core.js';
 import {
-  h, clear, icon, button, badge, pageHeader, DataTable, openDrawer, openModal, confirmDialog, toast, kv, section,
+  h, append, clear, icon, button, badge, pageHeader, DataTable, openDrawer, openModal, confirmDialog, toast, kv, section,
   codeBlock, errorBox, loadingRows, fmtRelative, withBusy, fmtNum,
 } from '../ui.js';
 import { openBackupModal, openRestoreModal, runBackup } from '../ops.js';
-import { openEditor, openBulkEditor, setEnabled, mergeRows } from '../alert-editor.js';
+import { openEditor, openBulkEditor, setEnabled, mergeRows, savedSearchRef, ownerText, SHARING_LABELS } from '../alert-editor.js';
+import { alertKindFilter, appFilter, enabledFilter } from '../filters.js';
 
 const SEVERITY = { 1: ['Debug', ''], 2: ['Info', ''], 3: ['Baja', 'accent'], 4: ['Media', 'warn'], 5: ['Alta', 'bad'], 6: ['Crítica', 'bad'] };
+
+/** Etiqueta de la versión de pruebas de un caso de uso («TEST - CU-…»); 'inline' para ponerla junto al nombre. */
+export function testBadge(row, { inline = false } = {}) {
+  if (!row.is_test) return null;
+  const el = badge('TEST', 'warn');
+  if (inline) el.classList.add('name-badge');
+  return el;
+}
+
+// --- Dependencias: macros (también las anidadas) y lookups que necesita una búsqueda ----------------------------
+
+const DEP_STATUS = {
+  ok: ['OK', 'good', 'check'],
+  disabled: ['Deshabilitada', 'warn', 'power'],
+  not_visible: ['No visible desde su app', 'bad', 'eyeOff'],
+  missing: ['No existe', 'bad', 'xCircle'],
+  file_missing: ['Falta el archivo CSV', 'bad', 'xCircle'],
+  file_not_visible: ['El CSV no se ve', 'bad', 'eyeOff'],
+};
+
+const depWhere = (d) => [d.app, d.sharing === 'user' ? `privada de ${d.owner}` : SHARING_LABELS[d.sharing] || d.sharing].filter(Boolean).join(' · ');
+
+function depHint(d, context) {
+  if (d.status === 'missing') {
+    return d.other_arities?.length ? `No existe con ese nº de argumentos; sí hay: ${d.other_arities.join(', ')}` : 'No está definida en este cliente.';
+  }
+  if (d.status === 'not_visible') return `Solo existe en ${d.not_visible_in.map(depWhere).join(' | ')}: desde ${context.app} no se ve.`;
+  if (d.status === 'file_missing') return `${depWhere(d)} · su archivo ${d.filename} no existe.`;
+  if (d.status === 'file_not_visible') return `${depWhere(d)} · su archivo ${d.filename} no se ve desde ${context.app}.`;
+  const parts = [depWhere(d)];
+  if (d.also?.length) parts.push(`tapa a otra definición en ${d.also.map(depWhere).join(' | ')}`);
+  return parts.join(' · ');
+}
+
+function depItem(d, label, context, onOpen, extra) {
+  const [text, variant, iconName] = DEP_STATUS[d.status] || [d.status, ''];
+  return h('li', { class: 'dep-item', style: { '--depth': d.depth || 0 } },
+    h('div', { class: 'dep-head' },
+      d.depth ? h('span', { class: 'dep-branch', 'aria-hidden': 'true' }, '↳') : null,
+      h('a', { href: '#', title: d.definition || null, onclick: (e) => { e.preventDefault(); onOpen(); } }, h('code', {}, label)),
+      badge(text, variant, iconName), extra),
+    h('div', { class: 'cell-sub' }, depHint(d, context)));
+}
+
+/** Macros y lookups que necesita una saved search y si están bien, vistos desde su app y su propietario. */
+function dependenciesSection(row, close) {
+  const slot = h('div', {}, loadingRows(2));
+  get('/api/splunk/saved-searches/dependencies', { client: state.client, ...savedSearchRef(row) }).then((deps) => {
+    const { macros, lookups, context } = deps;
+    if (!macros.length && !lookups.length) {
+      clear(slot).append(h('p', { class: 'muted', style: { margin: 0 } }, 'No usa macros ni lookups.'));
+      return;
+    }
+    const open = (view, q) => { close(); navigate(view, { q }); };
+    append(clear(slot), [
+      h('div', { class: 'badges', style: { marginBottom: '6px' } },
+        badge(`${fmtNum(macros.length)} ${macros.length === 1 ? 'macro' : 'macros'}`, '', 'braces'),
+        badge(`${fmtNum(lookups.length)} ${lookups.length === 1 ? 'lookup' : 'lookups'}`, '', 'sheet'),
+        deps.problems ? badge(`${fmtNum(deps.problems)} con problemas`, 'bad', 'alert') : badge('Todo correcto', 'good', 'check')),
+      macros.length ? [h('div', { class: 'dep-title' }, 'Macros'),
+        h('ul', { class: 'dep-list' }, macros.map((m) => depItem(m, m.stanza, context, () => open('macros', m.stanza))))] : null,
+      lookups.length ? [h('div', { class: 'dep-title' }, 'Lookups'),
+        h('ul', { class: 'dep-list' }, lookups.map((l) => depItem(l, l.name, context, () => open('lookups', l.name),
+          h('span', { class: 'muted', style: { fontSize: '12px' } }, [l.commands.join(', '), l.via ? `en ${l.via}` : null].filter(Boolean).join(' · ')))))] : null,
+      h('p', { class: 'field-hint', style: { marginTop: '10px' } },
+        `Vistas desde la app ${context.app} como ${context.owner}, igual que cuando se ejecuta. Las macros que llama otra macro aparecen debajo, sangradas.`),
+    ]);
+  }).catch((e) => clear(slot).append(errorBox(e.message)));
+  return section('Dependencias', slot);
+}
+
+function sharingBadge(row) {
+  if (row.sharing === 'user') return badge(`Privada de ${row.owner}`, 'outline', 'lock');
+  if (row.sharing === 'app') return badge('Solo en su app', 'outline');
+  return null;
+}
 
 function severityBadge(row) {
   const [text, variant] = SEVERITY[row.severity] || [];
@@ -25,7 +103,7 @@ function scheduleCell(row) {
 }
 
 async function action(row, name) {
-  return post('/api/splunk/saved-searches/action', { client: state.client, name: row.name, app: row.app, owner: row.owner, action: name });
+  return post('/api/splunk/saved-searches/action', { client: state.client, ...savedSearchRef(row), action: name });
 }
 
 async function dispatchNow(row) {
@@ -96,15 +174,17 @@ function openDetail(row, refreshTable, { isAlertView }) {
 
   const drawer = openDrawer({
     title: row.name,
-    subtitle: [row.app, row.owner, row.sharing].filter(Boolean).join(' · '),
+    subtitle: [row.app, ownerText(row)].filter(Boolean).join(' · '),
     actions,
     body: [
       h('div', { class: 'badges', style: { marginBottom: '16px' } },
         stateBadge(row),
         row.is_alert ? badge('Alerta', 'accent', 'bell') : badge('Reporte', '', 'report'),
         row.is_cu ? badge('CU-') : null,
+        testBadge(row),
         row.is_es ? badge('Enterprise Security', 'accent') : null,
-        row.scheduled ? badge('Programada', '', 'clock') : null),
+        row.scheduled ? badge('Programada', '', 'clock') : null,
+        sharingBadge(row)),
       section('Configuración', kv([
         ['Programación', row.scheduled ? h('code', {}, row.cron) : 'No programada'],
         ['Próxima ejecución', row.next_run || null],
@@ -116,6 +196,7 @@ function openDetail(row, refreshTable, { isAlertView }) {
         ['Descripción', row.description || null],
       ])),
       section('Búsqueda SPL', codeBlock(row.search)),
+      dependenciesSection(row, () => drawer.close()),
     ],
   });
 }
@@ -158,10 +239,10 @@ function makeView({ id, title, iconName, subtitle, rowFilter, filters, isAlertVi
           if (!table) {
             table = new DataTable({
               rows,
-              rowKey: (r) => `${r.app}/${r.owner}/${r.name}`,
+              rowKey: (r) => `${r.app}/${r.owner}/${r.sharing}/${r.name}`,
               selectable: true,
               initialQuery: params.q || '',
-              searchText: (r) => `${r.name} ${r.es_label} ${r.app} ${r.search}`,
+              searchText: (r) => `${r.name} ${r.es_label} ${r.app} ${r.owner} ${r.search}`,
               searchPlaceholder: 'Buscar por nombre, app o SPL…',
               filters,
               initialSort: { key: 'name', dir: 'asc' },
@@ -189,10 +270,10 @@ function makeView({ id, title, iconName, subtitle, rowFilter, filters, isAlertVi
                 {
                   key: 'name', label: 'Nombre',
                   render: (r) => h('div', { style: { minWidth: '220px' } },
-                    h('div', { class: 'cell-main' }, r.name),
+                    h('div', { class: 'cell-main' }, r.name, testBadge(r, { inline: true })),
                     (r.es_label || r.description) ? h('div', { class: 'cell-sub truncate', style: { maxWidth: '460px' } }, r.es_label || r.description) : null),
                 },
-                { key: 'app', label: 'App', render: (r) => h('div', {}, r.app, h('div', { class: 'cell-sub' }, r.owner)) },
+                { key: 'app', label: 'App', render: (r) => h('div', {}, r.app, h('div', { class: 'cell-sub' }, ownerText(r))) },
                 { key: 'cron', label: 'Programación', render: scheduleCell, sort: (r) => (r.scheduled ? r.cron : '~') },
                 isAlertView && { key: 'severity', label: 'Severidad', render: severityBadge, sort: (r) => Number(r.severity) || 0, defaultDir: 'desc' },
                 { key: 'disabled', label: 'Estado', render: stateBadge, sort: (r) => (r.disabled ? 1 : 0) },
@@ -244,34 +325,14 @@ function makeView({ id, title, iconName, subtitle, rowFilter, filters, isAlertVi
   };
 }
 
-const stateFilter = {
-  id: 'state',
-  options: [
-    { value: 'all', label: 'Todas' },
-    { value: 'on', label: 'Habilitadas', test: (r) => !r.disabled },
-    { value: 'off', label: 'Deshabilitadas', test: (r) => r.disabled },
-  ],
-};
-
 export const alertsView = makeView({
   id: 'alerts',
   title: 'Alertas',
   iconName: 'bell',
   isAlertView: true,
-  subtitle: () => `Alertas y casos de uso de Enterprise Security de ${state.client}. Pulse una fila para ver su SPL y configuración, o edítela con el lápiz.`,
+  subtitle: () => `Alertas y casos de uso de Enterprise Security de ${state.client}, de todas las apps y usuarios. Pulse una fila para ver su SPL, su configuración y sus dependencias, o edítela con el lápiz.`,
   rowFilter: (r) => r.is_alert || r.is_es,
-  filters: [
-    {
-      id: 'kind',
-      options: [
-        { value: 'all', label: 'Todas' },
-        { value: 'cu', label: 'CU-', test: (r) => r.is_cu },
-        { value: 'es', label: 'Enterprise Security', test: (r) => r.is_es },
-        { value: 'other', label: 'Otras', test: (r) => !r.is_cu && !r.is_es },
-      ],
-    },
-    stateFilter,
-  ],
+  filters: [alertKindFilter, enabledFilter, appFilter],
 });
 
 export const reportsView = makeView({
@@ -279,17 +340,19 @@ export const reportsView = makeView({
   title: 'Reportes',
   iconName: 'report',
   isAlertView: false,
-  subtitle: () => `Saved searches de ${state.client} que no son alertas.`,
+  subtitle: () => `Saved searches de ${state.client} que no son alertas, de todas las apps y usuarios.`,
   rowFilter: (r) => !r.is_alert && !r.is_es,
   filters: [
     {
       id: 'sched',
+      label: 'Programación',
       options: [
         { value: 'all', label: 'Todos' },
         { value: 'yes', label: 'Programados', test: (r) => r.scheduled },
         { value: 'no', label: 'No programados', test: (r) => !r.scheduled },
       ],
     },
-    stateFilter,
+    enabledFilter,
+    appFilter,
   ],
 });

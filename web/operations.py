@@ -12,7 +12,7 @@ from options.alerts.backup_alerts import (
     TECNOLOGIAS, backup_alerts, backup_alerts_especific, backup_alerts_custom, backup_alerts_by_name,
     backup_es_use_cases, backup_es_use_cases_custom,
 )
-from options.alerts.restore_alerts import restore_alerts_from_file
+from options.alerts.restore_alerts import KEEP_SHARING, restore_alerts_from_file
 from options.dashboards.backup_dashboard import backup_dashboard
 from options.dashboards.restore_dashboard import restore_dashboard
 from options.macros.backup_macros import backup_macros
@@ -26,6 +26,8 @@ from web.services import ClientError, get_service
 
 INVALID_LABEL = re.compile(r'[\\/:*?"<>|]')
 SHARING_LEVELS = ("global", "app", "user")
+# Al restaurar alertas y reportes también se puede mantener la compartición que tenían
+RESTORE_SHARING = (KEEP_SHARING,) + SHARING_LEVELS
 
 
 class OperationError(Exception):
@@ -73,7 +75,7 @@ def _backup_dashboards(service, names):
 def build_backup(kind, options):
     """Devuelve (título, función(service)) para el tipo de backup pedido, validando las opciones."""
     if kind == "alerts_all":
-        return "Backup de alertas CU-*", backup_alerts
+        return "Backup de alertas CU-* y TEST - CU-*", backup_alerts
     if kind == "alerts_tech":
         tech = options.get("tech")
         if tech not in TECNOLOGIAS:
@@ -124,7 +126,7 @@ def build_restore(folder, files, options):
             raise OperationError(f"No existe el archivo {os.path.basename(path)}.")
 
     sharing = options.get("sharing") or "global"
-    if sharing not in SHARING_LEVELS:
+    if sharing not in RESTORE_SHARING:
         raise OperationError("Nivel de compartición no válido.")
     opts = {"sharing": sharing, "initial_password": options.get("initial_password") or ""}
 

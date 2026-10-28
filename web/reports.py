@@ -117,7 +117,11 @@ def fmt_change(change):
 # --- Recogida de datos ----------------------------------------------------------------
 
 def _alert_kind(row):
-    return "ES" if row["is_es"] else "CU-" if row["is_cu"] else "Otra"
+    if row["is_es"]:
+        return "ES"
+    if row.get("is_test"):
+        return "CU- TEST"
+    return "CU-" if row["is_cu"] else "Otra"
 
 
 def collect_client(name, sections, days, threshold, ignored):

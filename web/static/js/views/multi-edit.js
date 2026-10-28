@@ -176,7 +176,8 @@ export default {
         return h('div', {}, item.rows.map((r) => h('div', { class: 'medit-found' },
           r.disabled ? badge('Deshabilitada', 'outline') : badge('Habilitada', 'good', 'check'),
           r.scheduled ? h('code', {}, r.cron) : h('span', { class: 'muted' }, 'no programada'),
-          item.rows.length > 1 ? h('span', { class: 'cell-sub' }, r.app) : null)));
+          item.rows.length > 1 || r.sharing === 'user'
+            ? h('span', { class: 'cell-sub' }, [r.app, r.sharing === 'user' ? `privada de ${r.owner}` : null].filter(Boolean).join(' · ')) : null)));
       };
       const table = h('table', { class: 'data compact' },
         h('thead', {}, h('tr', {}, h('th', { class: 'col-check' }), h('th', {}, 'Cliente'), lookup.names.map((n) => h('th', {}, n)))),
@@ -196,7 +197,31 @@ export default {
         h('div', { class: 'table-card', style: { marginTop: '14px' } }, h('div', { class: 'table-scroll' }, table)),
         h('p', { style: { margin: '8px 0 0' } }, counter),
         !withAlert.length ? infoBox('Ningún cliente tiene esas alertas. Revise el nombre (se busca el nombre exacto).', 'warn-box') : null,
+        pairsBox(),
       ]);
+    }
+
+    // La versión TEST y la de producción de un caso de uso son alertas distintas: se ofrecen para añadirlas, sin marcar
+    function pairsBox() {
+      const pairs = Object.entries(lookup.pairs || {}).flatMap(([of, list]) => list
+        .filter((p) => !names.includes(p.name)).map((p) => ({ of, name: p.name, clients: p.clients })));
+      if (!pairs.length) return null;
+      return h('div', { class: 'medit-pairs' },
+        h('strong', {}, 'Otra versión del mismo caso de uso'),
+        h('span', { class: 'field-hint' }, 'La versión TEST y la de producción son alertas distintas. Marque las que quiera cambiar también: se añaden y se vuelve a buscar.'),
+        pairs.map((p) => {
+          const cb = h('input', { type: 'checkbox' });
+          cb.addEventListener('change', () => {
+            if (!cb.checked || names.includes(p.name)) return;
+            names.push(p.name);
+            lookup = null;
+            stale();
+            renderNames();
+            lookupBtn.click();
+          });
+          return h('label', { class: 'check' }, cb,
+            h('span', {}, `«${p.name}»`, h('span', { class: 'muted' }, ` · de «${p.of}», en ${p.clients.join(', ')}`)));
+        }));
     }
 
     // --- 3. Cambios ------------------------------------------------------------------
@@ -339,8 +364,9 @@ export default {
           ];
         } else if (item.status === 'invalid' || item.status === 'error') content = h('p', { class: 'status-bad', style: { margin: 0 } }, item.error);
         else if (item.status === 'not_found') content = h('p', { class: 'muted', style: { margin: 0 } }, 'El texto a reemplazar no aparece: no se modifica.');
+        const where = [item.app, item.sharing === 'user' ? `privada de ${item.owner}` : null].filter(Boolean).join(', ');
         const head = h('div', { class: 'compare-block-head' }, h('strong', {}, item.client), item.name ? h('span', {}, `· ${item.name}`) : null,
-          item.app ? h('span', { class: 'muted' }, `(${item.app})`) : null, h('div', { style: { flex: 1 } }), badge(s.label, s.variant, s.icon));
+          where ? h('span', { class: 'muted' }, `(${where})`) : null, h('div', { style: { flex: 1 } }), badge(s.label, s.variant, s.icon));
         if (item.status !== 'change') return h('div', { class: 'compare-block medit-quiet' }, head, content);
         return h('details', { class: 'compare-block', open: changes.length <= 6 }, h('summary', {}, head), content);
       });

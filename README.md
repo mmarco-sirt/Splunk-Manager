@@ -2,7 +2,8 @@
 
 Herramienta para administrar varias plataformas Splunk: backup y restore de alertas, macros, usuarios, roles,
 dashboards y reportes (también en modo batch sobre varios clientes), edición de alertas (también en varios clientes a
-la vez), análisis de alertas ruidosas y muertas, comparación de clientes e informes en Excel/HTML/PDF. El CLI se puede
+la vez), dependencias de cada alerta (macros y lookups), inventario de lookups, análisis de alertas ruidosas y muertas,
+comparación de clientes e informes en Excel/HTML/PDF. El CLI se puede
 programar con el Programador de tareas de Windows para hacer backups e informes automáticos.
 
 ## Estructura
@@ -16,6 +17,10 @@ core/
   clients.py             Lectura/escritura de clientes en config.py (credenciales cifradas)
   vault.py               Cifrado de credenciales con DPAPI de Windows
   backup_files.py        Listado y selección de archivos de backup
+  conventions.py         Convenciones de SIRT: casos de uso CU- / TEST - CU- y la app de SIRT
+  knowledge.py           Saved searches y macros de todas las apps y usuarios, y cómo localizar cada una
+  spl.py                 Análisis estático de SPL: macros que llama y lookups que usa
+  dependencies.py        Dependencias de una búsqueda (macros anidadas y lookups) y si se ven desde su app
 options/
   alerts/                Backup / restore / listado / habilitar y deshabilitar alertas (incl. Enterprise Security)
   macros/  users/  roles/  dashboards/  reports/
@@ -24,6 +29,8 @@ web/
   app.py                 API JSON y página web
   services.py            Conexiones reutilizables a cada cliente
   explorer.py            Consultas en vivo (alertas, macros, usuarios, índices, búsquedas SPL...)
+  lookups.py             Lookups (definiciones, archivos y automáticos), dónde se usan y vista previa
+  dependencies.py        Dependencias de una saved search en un cliente
   alert_editor.py        Edición de alertas y reportes (también en bloque)
   multi_edit.py          Edición de alertas en varios clientes a la vez (vista previa y backup)
   alert_analysis.py      Análisis de alertas: ruidosas, muertas, planificador y tendencia
@@ -32,6 +39,7 @@ web/
   operations.py          Backup/restore desde la web usando las funciones de options/
   jobs.py                Tareas en segundo plano con su log
   templates/ static/     Interfaz (HTML/CSS/JS sin dependencias externas) y plantilla de los informes
+tests/                   Tests de las funciones puras (python -m unittest discover -s tests -t .)
 backups/<tipo>/          Backups generados (no se versiona)
 informes/                Informes generados (no se versiona)
 logs/                    Logs del modo no interactivo del CLI (no se versiona)
@@ -59,9 +67,18 @@ Secciones:
   últimas 24 h, y fuentes que han dejado de enviar datos), con el umbral configurable y fuentes que se pueden ignorar.
 - **Búsqueda**: búsquedas SPL con rango de tiempo, progreso, cancelación y exportación a CSV/JSON, en el cliente
   activo o en **varios clientes a la vez** (resultados unidos con una columna `cliente`, p. ej. para buscar un IOC).
-- **Alertas / Reportes**: listado en vivo con filtros (CU-, Enterprise Security, habilitadas...), detalle con el SPL,
+- **Alertas / Reportes**: listado en vivo de todas las apps y usuarios (también las privadas y las compartidas solo en
+  su app, con su propietario y compartición) y filtros combinables con su etiqueta: **Tipo** (CU-, TEST, Enterprise
+  Security, otras), **Estado** y **App** (todas o solo la app de SIRT). Detalle con el SPL y sus **dependencias**,
   habilitar/deshabilitar (una o varias seleccionadas, guardando antes su configuración), ejecutar ahora, backup (todas,
-  por tecnología, por texto, ES o selección) y restore.
+  por tecnología, por texto, ES o selección) y restore. Las alertas de pruebas `TEST - CU-…` llevan la etiqueta TEST (ver
+  «Alertas TEST y objetos de otros usuarios»).
+  **Dependencias**: las macros que necesita la búsqueda (también las que llaman otras macros, sangradas debajo) y los
+  lookups que usa (`lookup`, `inputlookup`, `outputlookup`), cada uno con su estado: OK, no existe (y, si la hay, la
+  macro con otro nº de argumentos), deshabilitado, no visible desde la app de la alerta (solo está en otra app o es
+  privado de otro usuario) o definición de lookup cuyo CSV falta. Se resuelven como Splunk: desde la app y el propietario
+  de la alerta, y si hay varias con el mismo nombre se usa la privada del propietario, luego la de su app y por último
+  una global; se avisa si una tapa a otra.
   **Edición**: SPL, descripción, programación (cron con ayuda), ventana, condición de disparo, umbral, severidad,
   supresión, acciones y email, y un editor «Avanzado» con todos los parámetros. Antes de guardar se muestra el
   resumen de cambios. También se pueden **modificar en bloque** varias seleccionadas. Antes de cada cambio se guarda
@@ -81,12 +98,20 @@ Secciones:
   reemplazar** un texto en el SPL de cada cliente, que conserva el resto de su búsqueda) y una **vista previa** muestra
   campo a campo qué cambia en cada cliente. Al aplicar se guarda antes la configuración de cada cliente en su archivo
   «antes_de_editar» y solo se modifica lo que no haya cambiado desde la vista previa. También sirve para habilitar o
-  deshabilitar una alerta en todos los clientes.
-- **Macros**: listado con filtros, detalle con la definición y **dónde se usa** (alertas, reportes y otras macros),
-  **edición** (definición, argumentos, eval, descripción y validación, con revisión de cambios) y **habilitar o
-  deshabilitar** una o varias seleccionadas. Antes de cada cambio se guarda la configuración anterior en
-  `backups/macros/macros_antes_de_editar_<host>_backup.json` (con historial), así que se puede deshacer restaurándolo.
-  Los backups de macros incluyen también eval, estado y descripción, y el restore los aplica.
+  deshabilitar una alerta en todos los clientes. `CU-X` y `TEST - CU-X` son alertas distintas: al buscar una se indica en
+  qué clientes existe la otra versión y se puede añadir (sin marcar por defecto).
+- **Macros**: listado de todas las apps y usuarios con filtros (compartición, estado y app SIRT), detalle con la
+  definición y **dónde se usa** (alertas, reportes y otras macros), **edición** (definición, argumentos, eval, descripción
+  y validación, con revisión de cambios) y **habilitar o deshabilitar** una o varias seleccionadas. Antes de cada cambio
+  se guarda la configuración anterior en `backups/macros/macros_antes_de_editar_<host>_backup.json` (con historial), así
+  que se puede deshacer restaurándolo. Los backups de macros incluyen también eval, estado y descripción, y el restore
+  los aplica.
+- **Lookups**: definiciones (CSV, KV Store, externos y geoespaciales), archivos de lookup y lookups automáticos de todas
+  las apps y usuarios, con filtros (tipo, con problemas, app SIRT). Se avisa de las definiciones cuyo CSV no existe o no
+  se ve desde su app, de las del KV Store sin colección y de los automáticos sin definición. El detalle muestra su
+  configuración, **dónde se usa** (alertas, reportes, macros y lookups automáticos; un CSV también a través de las
+  definiciones que apuntan a él) y, a petición, el **contenido**: las 100 primeras filas y el total, con
+  `| inputlookup` en la app del lookup (solo lectura).
 - **Dashboards, Usuarios, Roles**: listado, detalle, backup y restore.
 - **Índices / Apps**: eventos, tamaño, retención y archivado (en Splunk Cloud, datos reales de los indexers),
   versiones y estado.
@@ -101,18 +126,54 @@ Secciones:
 - **Comparar clientes**: un cliente de referencia frente a uno o varios clientes (alertas, reportes, macros,
   dashboards, roles, usuarios, índices y apps): qué falta, qué sobra y qué es distinto, con las diferencias campo a
   campo. Las alertas, reportes, macros, dashboards y roles se pueden **copiar** de un cliente a otros; antes de
-  sobrescribir se guarda lo que había en `backups/<tipo>/…antes_de_copiar_<host>_backup.json`.
+  sobrescribir se guarda lo que había en `backups/<tipo>/…antes_de_copiar_<host>_backup.json`. En alertas y reportes,
+  **Emparejar TEST y producción** pone `TEST - CU-X` y `CU-X` en la misma fila para ver en qué fase está cada cliente
+  (en cada uno se compara la misma fase que en la referencia, o la otra si no la tiene); la copia usa el nombre real.
 - **Informes**: informe de uno o varios clientes con salud, ingesta, inventario y análisis de alertas, índices y usuarios/roles,
   en **Excel**, **HTML** (para ver o imprimir) y **PDF** (se genera con Microsoft Edge en modo headless). Se guardan en
   `informes/`. También desde «Salud de clientes» → «Exportar informe…».
 - **Clientes**: alta, edición, borrado y prueba de cada credencial antes de guardar (las contraseñas y tokens nunca
-  se envían al navegador).
+  se envían al navegador). Cada cliente puede indicar su **App SIRT** si allí no se llama `sirt_soc_app_for_splunk`.
 - **Actividad**: cada backup/restore se ejecuta como tarea en segundo plano con su log en vivo.
 
 Opciones: `--port 8765`, `--host 127.0.0.1`, `--no-browser`. Por defecto solo escucha en este equipo.
 Para abrirlo a la red (`--host 0.0.0.0`) es obligatorio definir una contraseña de acceso en la variable de
 entorno `SPLUNK_MANAGER_PASSWORD` (el navegador la pedirá; el usuario puede ser cualquiera), ya que la
 aplicación tiene acceso a las credenciales de todos los clientes.
+
+## Alertas TEST y objetos de otros usuarios
+
+Convención de nombres: en producción `CU-<TEC>-<ID>-<MITRE> <Nombre>` y en pruebas el mismo nombre con el prefijo
+`TEST - ` (p. ej. `TEST - CU-CA-AUTH-1152-T1078 Geographically Improbable Access`). La lógica está en
+`core/conventions.py` (`is_cu_alert`, `is_test_alert`, `strip_test_prefix`); el prefijo se reconoce aunque esté mal
+escrito (`TEST-CU-…`, `Test - CU-…`).
+
+- Los backups de alertas «CU-\*» (web y `--backup alertas` del CLI) incluyen también las `TEST - CU-*`.
+- El listado de Alertas, el Análisis de alertas y Comparar distinguen en el filtro **Tipo** los CU- de producción y
+  las TEST.
+- En Salud de clientes, «casos de uso CU- deshabilitados» cuenta solo los de producción (es normal que una TEST esté
+  deshabilitada).
+
+La app propia de SIRT es `sirt_soc_app_for_splunk` (`SIRT_APP` en `core/conventions.py`). Si en algún cliente se llama
+de otra forma, se indica en su campo **App SIRT** (en Clientes, o `"sirt_app"` en `config.py`). La usa el filtro
+«App SIRT» de Alertas, Reportes, Macros y Lookups.
+
+Las saved searches y las macros se leen de **todas las apps y usuarios** (`/servicesNS/-/-/`): con `/services/` Splunk
+no devuelve los objetos privados de otros usuarios ni los compartidos solo dentro de otra app, y por eso no se veían
+algunas TEST. Puede haber varios con el mismo nombre (p. ej. el compartido y la copia privada de un usuario), así que cada
+uno se identifica por su nombre, app, propietario y compartición (`core/knowledge.py`):
+
+- Los backups de alertas, reportes y macros guardan de cada elemento su `acl` (app, propietario y compartición). Al
+  restaurar se actualiza ese mismo objeto, en su app; si ya no está, uno compartido con el mismo nombre si el del
+  backup lo era, pero nunca la copia privada de otro usuario (se crea uno nuevo). Los backups antiguos, sin `acl`, se
+  restauran como antes.
+- «Compartición tras restaurar» (alertas y reportes) tiene una opción nueva, **Mantener la que tenían** (por defecto en
+  la web): las que ya existen conservan la suya y las nuevas usan la del backup (o global en los backups antiguos). El
+  restore del CLI sigue aplicando global.
+- El restore de macros actualiza cada macro en su propia app. Antes la actualización iba al namespace `nobody/system`
+  (el SDK toma `sharing` como namespace), así que no cambiaba la macro de la app. Con los backups antiguos las macros
+  existentes se siguen haciendo globales y las nuevas se crean como antes.
+- En Comparar, los privados aparecen como `nombre [privada de usuario]`.
 
 ## Historial de backups
 
@@ -162,7 +223,7 @@ Con argumentos, `main_cli.py` (o `Splunk_Manager_CLI.exe`) no pregunta nada y se
 tareas de Windows. `python main_cli.py --help` muestra todas las opciones.
 
 ```
-main_cli.py --backup alertas macros --clientes todos               # backup de alertas CU-* y macros de todos
+main_cli.py --backup alertas macros --clientes todos               # backup de alertas CU-* (y TEST - CU-*) y macros de todos
 main_cli.py --backup todo --clientes todos --excluir PRUEBAS        # alertas, es, reportes, macros, usuarios y roles
 main_cli.py --informe --clientes todos --dias 7                     # informe semanal (Excel + PDF) de todos
 main_cli.py --informe --por-cliente --clientes CLI1,CLI2 --secciones salud,analisis --formatos xlsx,pdf
@@ -171,13 +232,13 @@ main_cli.py --listar-clientes
 ```
 
 - **Clientes**: `--clientes todos` o nombres separados por comas (sin distinguir mayúsculas); `--excluir` quita algunos.
-- **Backups** (`--backup`): `alertas` (CU-*), `es`, `reportes`, `macros`, `usuarios`, `roles` o `todo`. Se guardan igual
-  que desde la web, con su historial de versiones.
+- **Backups** (`--backup`): `alertas` (CU-\* y TEST - CU-\*), `es`, `reportes`, `macros`, `usuarios`, `roles` o `todo`.
+  Se guardan igual que desde la web, con su historial de versiones, y leen las saved searches de todas las apps y usuarios.
 - **Informes** (`--informe`): secciones `salud`, `ingesta`, `alertas`, `analisis`, `indices`, `usuarios` (por defecto
   todas), formatos `xlsx`, `html`, `pdf` (por defecto Excel y PDF), `--dias 7|30|90` (por defecto 7) y `--por-cliente`
   para un archivo por cliente. Se guardan en `informes/`.
 - **Habilitar / deshabilitar** (`--habilitar`, `--deshabilitar`): nombres separados por comas, con comodines
-  (`CU-AD-*`); `--simular` muestra lo que cambiaría sin tocar nada. Antes de cambiar nada se guarda la configuración en
+  (`CU-AD-*`, `TEST - CU-*`), en todas las apps y usuarios; `--simular` muestra lo que cambiaría sin tocar nada. Antes de cambiar nada se guarda la configuración en
   el backup «antes_de_editar». También está en el menú interactivo (opción 19), junto al análisis de alertas (opción 20).
 - Todo lo que se muestra se guarda en `logs/AAAAMMDD-HHMMSS_<acción>.log` (se conservan los 200 últimos; `--sin-log` lo
   desactiva). **Código de salida**: 0 correcto, 1 algún cliente u operación falló (ver el log), 2 argumentos no válidos.

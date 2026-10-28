@@ -1,12 +1,14 @@
-// Vistas de listado de objetos de Splunk: macros, dashboards, usuarios, roles, índices y apps.
+// Vistas de listado de objetos de Splunk: macros, lookups, dashboards, usuarios, roles, índices y apps.
+import { get, post } from '../api.js';
 import { state, loadResource, cachedAt, navigate } from '../core.js';
 import {
   h, clear, button, badge, pageHeader, DataTable, openDrawer, kv, section, codeBlock, errorBox, loadingRows,
-  fmtNum, fmtMB, fmtRelative, fmtDate, withBusy, confirmDialog, toast,
+  fmtNum, fmtMB, fmtRelative, fmtDate, withBusy, confirmDialog, toast, infoBox,
 } from '../ui.js';
 import { openRestoreModal, runBackup } from '../ops.js';
-import { mergeRows } from '../alert-editor.js';
+import { mergeRows, ownerText } from '../alert-editor.js';
 import { openMacroEditor, setMacrosEnabled } from '../macro-editor.js';
+import { appFilter, enabledFilter } from '../filters.js';
 
 /**
  * Fábrica de vistas de listado con caché por cliente, botón de actualizar y tabla.
@@ -107,7 +109,7 @@ function macroDetail(m, ctx) {
   const usage = h('div', {}, loadingRows(2));
   const drawer = openDrawer({
     title: m.args ? `${m.name}(${m.args})` : m.name,
-    subtitle: [m.app, m.owner, m.sharing].filter(Boolean).join(' · '),
+    subtitle: [m.app, ownerText(m)].filter(Boolean).join(' · '),
     actions: [editBtn, toggleBtn],
     body: [
       h('div', { class: 'badges', style: { marginBottom: '16px' } }, macroState(m), m.iseval ? badge('Expresión eval', 'accent') : null),
@@ -130,11 +132,11 @@ function macroDetail(m, ctx) {
 
 export const macrosView = listView({
   id: 'macros', title: 'Macros', iconName: 'braces', resource: 'macros',
-  subtitle: () => `Macros de búsqueda de ${state.client}. Pulse una fila para ver su definición y dónde se usa, o edítela con el lápiz.`,
+  subtitle: () => `Macros de búsqueda de ${state.client}, de todas las apps y usuarios. Pulse una fila para ver su definición y dónde se usa, o edítela con el lápiz.`,
   actions: () => [restoreButton('macros'), backupButton('Backup de macros', 'macros')],
   table: (ctx) => ({
-    rowKey: (m) => `${m.app}/${m.owner}/${m.name}`,
-    searchText: (m) => `${m.name} ${m.definition} ${m.app}`,
+    rowKey: (m) => `${m.app}/${m.owner}/${m.sharing}/${m.name}`,
+    searchText: (m) => `${m.name} ${m.definition} ${m.app} ${m.owner}`,
     searchPlaceholder: 'Buscar por nombre o definición…',
     initialSort: { key: 'name', dir: 'asc' },
     selectable: true,
@@ -146,6 +148,7 @@ export const macrosView = listView({
     filters: [
       {
         id: 'sharing',
+        label: 'Compartición',
         options: [
           { value: 'all', label: 'Todas' },
           { value: 'global', label: 'Globales', test: (m) => m.sharing === 'global' },
@@ -153,20 +156,13 @@ export const macrosView = listView({
           { value: 'user', label: 'Privadas', test: (m) => m.sharing === 'user' },
         ],
       },
-      {
-        id: 'state',
-        options: [
-          { value: 'all', label: 'Todas' },
-          { value: 'on', label: 'Habilitadas', test: (m) => !m.disabled },
-          { value: 'off', label: 'Deshabilitadas', test: (m) => m.disabled },
-        ],
-      },
+      enabledFilter,
+      appFilter,
     ],
     columns: [
       { key: 'name', label: 'Nombre', render: (m) => h('div', {}, h('div', { class: 'cell-main' }, m.name), m.args ? h('div', { class: 'cell-sub' }, `(${m.args})`) : null) },
       { key: 'definition', label: 'Definición', render: (m) => h('div', { class: 'cell-code', title: m.definition }, m.definition) },
-      { key: 'app', label: 'App' },
-      { key: 'sharing', label: 'Compartición', render: (m) => badge(m.sharing || '—') },
+      { key: 'app', label: 'App', render: (m) => h('div', {}, m.app, h('div', { class: 'cell-sub' }, ownerText(m))) },
       { key: 'disabled', label: 'Estado', render: macroState, sort: (m) => (m.disabled ? 1 : 0) },
       {
         key: 'actions', label: '', className: 'col-actions', sortable: false,
@@ -181,6 +177,169 @@ export const macrosView = listView({
       },
     ],
   }),
+});
+
+// --- Lookups -----------------------------------------------------------------
+
+const LOOKUP_KINDS = { definition: 'Definición', file: 'Archivo', automatic: 'Automático' };
+const LOOKUP_TYPES = {
+  file: ['CSV', ''], kvstore: ['KV Store', 'accent'], external: ['Externo', 'outline'], geo: ['Geoespacial', 'outline'],
+  csv: ['CSV', ''], automatic: ['Automático', 'outline'],
+};
+const LOOKUP_PROBLEMS = {
+  file_missing: 'Falta el archivo CSV', file_not_visible: 'Su CSV no se ve desde su app',
+  collection_missing: 'No existe la colección del KV Store', definition_missing: 'No existe su definición',
+};
+// Se puede ver el contenido con | inputlookup (los externos y los automáticos no son tablas)
+const canPreview = (l) => l.kind === 'file' || (l.kind === 'definition' && l.type !== 'external');
+
+function lookupTypeBadge(l) {
+  if (l.kind === 'automatic') return null;   // su tipo ya es «Automático»
+  const [text, variant] = LOOKUP_TYPES[l.type] || [l.type || '—', 'outline'];
+  return badge(text, variant);
+}
+
+function lookupStatus(l) {
+  if (l.problems?.length) return h('div', { class: 'badges' }, l.problems.map((p) => badge(LOOKUP_PROBLEMS[p] || p, 'bad', 'alert')));
+  return l.disabled ? badge('Deshabilitado', 'outline') : badge('OK', 'good', 'check');
+}
+
+function lookupSource(l) {
+  if (l.kind === 'automatic') return h('div', {}, h('code', {}, l.source || '—'), h('div', { class: 'cell-sub' }, `en ${l.stanza}`));
+  if (l.kind === 'file') {
+    return l.definitions.length ? h('span', { class: 'muted' }, `Usado por ${l.definitions.join(', ')}`) : h('span', { class: 'muted' }, 'Sin definición');
+  }
+  return l.source ? h('code', {}, l.source) : h('span', { class: 'muted' }, '—');
+}
+
+// Búsquedas, macros y lookups automáticos que lo usan (lookup, inputlookup, outputlookup), calculado en el servidor
+function lookupUsage(l, drawer) {
+  const slot = h('div', {}, loadingRows(2));
+  get('/api/splunk/lookups/usage', { client: state.client, name: l.name, kind: l.kind }).then((usage) => {
+    const link = (label, sub, onClick) => h('li', {},
+      h('a', { href: '#', onclick: (e) => { e.preventDefault(); drawer.close(); onClick(); } }, label),
+      sub ? h('span', { class: 'muted' }, ` · ${sub}`) : null);
+    const via = (item) => (item.via?.length ? `a través de ${item.via.join(', ')}` : null);
+    const total = usage.searches.length + usage.macros.length + usage.automatic.length;
+    clear(slot).append(total
+      ? h('ul', { class: 'list-plain' },
+        usage.searches.slice(0, 100).map((s) => link(`${s.name}${s.disabled ? ' (deshabilitada)' : ''}`,
+          [s.commands.join(', '), via(s)].filter(Boolean).join(' · '),
+          () => navigate(s.is_alert ? 'alerts' : 'reports', { q: s.name }))),
+        usage.macros.slice(0, 50).map((m) => link(`Macro ${m.name}`, via(m), () => navigate('macros', { q: m.name }))),
+        usage.automatic.map((a) => link(`Automático ${a.name}`, [`en ${a.stanza}`, via(a)].filter(Boolean).join(' · '), () => navigate('lookups', { q: a.name }))),
+        usage.searches.length > 100 ? h('li', { class: 'muted' }, 'y más…') : null)
+      : h('p', { class: 'muted', style: { margin: 0 } }, 'Ninguna alerta, reporte, macro ni lookup automático de este cliente lo usa (los dashboards no se revisan).'));
+  }).catch((e) => clear(slot).append(errorBox(e.message)));
+  return slot;
+}
+
+// Primeras filas y total con | inputlookup (solo lectura), al pulsar el botón
+function lookupPreview(l) {
+  const slot = h('div');
+  const btn = button(`Ver las primeras filas`, { size: 'sm', iconName: 'eye' });
+  btn.addEventListener('click', () => withBusy(btn, async () => {
+    try {
+      const data = await post('/api/splunk/lookups/preview', { client: state.client, name: l.name, app: l.app, owner: l.owner, sharing: l.sharing });
+      const value = (v) => (Array.isArray(v) ? v.join('\n') : v ?? '');
+      clear(slot).append(
+        h('p', { class: 'muted', style: { margin: '0 0 8px', fontSize: '12.5px' } },
+          data.total === null ? `${fmtNum(data.rows.length)} filas mostradas (no se pudo contar el total: ${data.count_error})`
+            : data.truncated ? `${fmtNum(data.total)} filas en total; se muestran las ${fmtNum(data.rows.length)} primeras.`
+              : `${fmtNum(data.total)} filas.`),
+        data.rows.length
+          ? h('div', { class: 'lookup-preview' }, h('table', { class: 'data compact' },
+            h('thead', {}, h('tr', {}, data.fields.map((f) => h('th', {}, f)))),
+            h('tbody', {}, data.rows.map((row) => h('tr', {}, data.fields.map((f) => h('td', { class: 'cell-wrap' }, value(row[f]))))))))
+          : h('p', { class: 'muted', style: { margin: 0 } }, 'El lookup está vacío.'));
+    } catch (e) {
+      clear(slot).append(errorBox(e.message));
+    }
+  }));
+  return h('div', {}, h('p', { class: 'field-hint', style: { margin: '0 0 8px' } }, 'Se lee con | inputlookup en la app del lookup (solo lectura).'), btn, slot);
+}
+
+function lookupDetail(l) {
+  const drawer = openDrawer({ title: l.name, subtitle: `${LOOKUP_KINDS[l.kind]} · ${[l.app, ownerText(l)].filter(Boolean).join(' · ')}`, width: 820, body: loadingRows(3) });
+  const map = (fields) => Object.entries(fields || {}).map(([k, v]) => `${k} → ${v}`).join('\n') || null;
+  const problems = (l.problems || []).map((p) => infoBox(LOOKUP_PROBLEMS[p] || p, 'warn-box'));
+  let config;
+  if (l.kind === 'definition') {
+    config = kv([
+      ['Tipo', lookupTypeBadge(l)],
+      [l.type === 'kvstore' ? 'Colección' : l.type === 'external' ? 'Comando' : 'Archivo', l.source ? h('code', {}, l.source) : null],
+      ['Campos', l.fields || null],
+      ...Object.entries(l.options || {}).map(([k, v]) => [k, String(v)]),
+      ['Estado', l.disabled ? 'Deshabilitado' : 'Habilitado'],
+    ]);
+  } else if (l.kind === 'file') {
+    config = kv([
+      ['Tipo', lookupTypeBadge(l)],
+      ['Definiciones que lo usan', l.definitions.length ? l.definitions.join(', ') : null],
+      ['Ruta', l.source ? h('code', {}, l.source) : null],
+      ['Actualizado', l.updated ? fmtDate(l.updated) : null],
+    ]);
+  } else {
+    config = kv([
+      ['Se aplica a', l.stanza ? h('code', {}, l.stanza) : null],
+      ['Definición', l.source ? h('a', { href: '#', onclick: (e) => { e.preventDefault(); drawer.close(); navigate('lookups', { q: l.source }); } }, l.source) : null],
+      ['Campos de entrada', map(l.inputs)],
+      ['Campos de salida', map(l.outputs)],
+      ['Sobrescribe', l.overwrite ? 'Sí' : 'No'],
+    ]);
+  }
+  drawer.setBody([
+    h('div', { class: 'badges', style: { marginBottom: '14px' } }, badge(LOOKUP_KINDS[l.kind], 'accent'), lookupTypeBadge(l), l.disabled ? badge('Deshabilitado', 'outline') : null),
+    problems,
+    section('Configuración', config),
+    l.kind !== 'automatic' ? section('Dónde se usa', lookupUsage(l, drawer)) : null,
+    canPreview(l) ? section('Contenido', lookupPreview(l)) : null,
+  ]);
+}
+
+export const lookupsView = listView({
+  id: 'lookups', title: 'Lookups', iconName: 'sheet', resource: 'lookups',
+  subtitle: () => `Lookups de ${state.client}, de todas las apps y usuarios: definiciones (CSV, KV Store, externos…), archivos y lookups automáticos. Pulse una fila para ver su configuración, dónde se usa y su contenido.`,
+  table: {
+    rowKey: (l) => `${l.kind}/${l.app}/${l.owner}/${l.sharing}/${l.stanza || ''}/${l.name}`,
+    searchText: (l) => `${l.name} ${l.source} ${l.app} ${l.owner} ${l.stanza || ''} ${l.fields || ''}`,
+    searchPlaceholder: 'Buscar por nombre, archivo, colección o app…',
+    initialSort: { key: 'name', dir: 'asc' },
+    onRowClick: lookupDetail,
+    filters: [
+      {
+        id: 'kind',
+        label: 'Tipo',
+        options: [
+          { value: 'all', label: 'Todos' },
+          { value: 'definition', label: 'Definiciones', test: (l) => l.kind === 'definition' },
+          { value: 'file', label: 'Archivos', test: (l) => l.kind === 'file' },
+          { value: 'automatic', label: 'Automáticos', test: (l) => l.kind === 'automatic' },
+        ],
+      },
+      {
+        id: 'problems',
+        label: 'Estado',
+        options: [
+          { value: 'all', label: 'Todos' },
+          { value: 'problems', label: 'Con problemas', test: (l) => l.problems?.length > 0 },
+          { value: 'off', label: 'Deshabilitados', test: (l) => l.disabled },
+        ],
+      },
+      appFilter,
+    ],
+    columns: [
+      {
+        key: 'name', label: 'Nombre',
+        render: (l) => h('div', { style: { minWidth: '200px', maxWidth: '420px' } }, h('div', { class: 'cell-main truncate' }, l.name),
+          l.fields ? h('div', { class: 'cell-sub truncate', title: l.fields }, l.fields) : null),
+      },
+      { key: 'kind', label: 'Tipo', sort: (l) => `${l.kind}/${l.type}`, render: (l) => h('div', { class: 'badges' }, badge(LOOKUP_KINDS[l.kind]), lookupTypeBadge(l)) },
+      { key: 'source', label: 'Origen', render: lookupSource },
+      { key: 'app', label: 'App', render: (l) => h('div', {}, l.app, h('div', { class: 'cell-sub' }, ownerText(l))) },
+      { key: 'problems', label: 'Estado', sort: (l) => (l.problems?.length ? 0 : l.disabled ? 1 : 2), render: lookupStatus },
+    ],
+  },
 });
 
 // --- Dashboards --------------------------------------------------------------
