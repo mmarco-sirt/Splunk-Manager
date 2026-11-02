@@ -40,6 +40,7 @@ web/
   app_diff.py            Validar app: cambios entre versiones o frente a un cliente
   app_validation.py      Validar app: comprobaciones del paquete y contra un cliente, y ejecución de búsquedas
   app_report.py          Validar app: informe en Excel, HTML y PDF
+  addons.py              Add-ons: pendientes por cliente y de todos, actualización vía ACS como tarea y cuenta de Splunkbase
   alert_editor.py        Edición de alertas y reportes (también en bloque)
   multi_edit.py          Edición de alertas en varios clientes a la vez (vista previa y backup)
   alert_analysis.py      Análisis de alertas: ruidosas, muertas, planificador y tendencia
@@ -140,6 +141,11 @@ Secciones:
   **Emparejar TEST y producción** pone `TEST - CU-X` y `CU-X` en la misma fila para ver en qué fase está cada cliente
   (en cada uno se compara la misma fase que en la referencia, o la otra si no la tiene); la copia usa el nombre real.
 - **Validar app**: validación de una versión de la app de SIRT antes de desplegarla (ver «Validar app»).
+- **Add-ons**: apps y add-ons de Splunkbase con una versión nueva en el cliente activo (las del aviso «Update» de Manage
+  Apps), con sus notas (cambio de versión mayor, deshabilitada, no gestionable por ACS) y enlace a Splunkbase; se
+  actualizan las seleccionadas o todas como tarea cancelable, de una en una vía ACS. Tarjeta «Todos los clientes» con
+  las pendientes de cada cliente (pulsar una fila cambia a ese cliente) y gestión de la cuenta de Splunkbase (se
+  comprueba en Splunkbase antes de guardarla cifrada). Ver «Actualizar add-ons y apps de Splunkbase».
 - **Informes**: informe de uno o varios clientes con salud, ingesta, inventario y análisis de alertas, índices y usuarios/roles,
   en **Excel**, **HTML** (para ver o imprimir) y **PDF** (se genera con Microsoft Edge en modo headless). Se guardan en
   `informes/`. También desde «Salud de clientes» → «Exportar informe…».
@@ -245,7 +251,8 @@ respecto a la versión comparada y la validación y ejecución elegidas.
 
 ## Actualizar add-ons y apps de Splunkbase (ACS)
 
-Opción **21** del menú del CLI y `--addons` / `--actualizar-addons` en modo no interactivo. Las «pendientes» son las apps
+Sección **Gestión → Add-ons** de la web, opción **21** del menú del CLI y `--addons` / `--actualizar-addons` en modo no
+interactivo. Las «pendientes» son las apps
 para las que el propio Splunk ya ha detectado una versión nueva en Splunkbase (el aviso «Update» de Apps → Manage Apps,
 campos `update.*` de `apps/local`). Se actualizan a través del **Admin Config Service (ACS)** de Splunk Cloud
 (`PATCH /adminconfig/v2/apps/victoria/<app>`), igual que lo haría el botón de Splunk Web, de una en una y esperando a que
@@ -255,9 +262,9 @@ Requisitos:
 - Stack de Splunk Cloud con **Victoria Experience** y el **token** del cliente en `config.py` (`splunkToken`): ACS no
   admite usuario/contraseña y el usuario del token debe tener el rol `sc_admin`.
 - Una **cuenta de Splunkbase** (usuario y contraseña de splunk.com), con la que ACS descarga la app. Se puede guardar en
-  `config.py` desde la opción 21 (`splunkbase = {...}`; la contraseña se cifra con DPAPI como las demás), indicarla con
-  las variables de entorno `SPLUNKBASE_USERNAME` y `SPLUNKBASE_PASSWORD`, o con `--splunkbase-usuario` más
-  `SPLUNKBASE_PASSWORD`.
+  `config.py` desde la sección Add-ons de la web o la opción 21 del CLI (`splunkbase = {...}`; la contraseña se cifra
+  con DPAPI como las demás), indicarla con las variables de entorno `SPLUNKBASE_USERNAME` y `SPLUNKBASE_PASSWORD`, o
+  con `--splunkbase-usuario` más `SPLUNKBASE_PASSWORD`.
 
 Antes de actualizar se guarda en `backups/addons/addons_<host>_backup.json` (con historial) la lista de apps con su
 versión, por si hay que volver a una versión anterior (ACS permite instalar una versión concreta). Las apps que no constan

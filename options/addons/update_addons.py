@@ -50,27 +50,36 @@ def select_pending(pending, names):
     return chosen, [n for n in names if n not in matched]
 
 
-def list_pending(service, client, log=print):
+def pending_with_acs(service, client):
     """
-    Muestra las actualizaciones pendientes del cliente y las devuelve. A cada una se le añade 'acs': True si ACS la
-    gestiona como app de Splunkbase, False si no (habrá que pedirla a soporte) y None si no se pudo consultar ACS.
+    Actualizaciones pendientes del cliente con el campo 'acs': True si ACS la gestiona como app de Splunkbase, False si
+    no (instalada como app privada o por soporte: no se puede actualizar por esta vía) y None si no se pudo consultar
+    ACS. Devuelve (pendientes, avisos).
     """
     pending = acs.pending_updates(service)
-    managed = None
+    warnings, managed = [], None
     reason = acs.unavailable_reason(client)
     if reason:
-        log(f"⚠️ {client.get('name')}: {reason}; se muestran las pendientes pero no se pueden actualizar desde aquí.")
+        warnings.append(f"⚠️ {client.get('name')}: {reason}; se muestran las pendientes pero no se pueden actualizar "
+                        "desde aquí.")
     else:
         try:
             managed = {a.get("name"): a for a in acs.list_apps(client)}
         except acs.AcsError as e:
-            log(f"⚠️ No se pudo consultar ACS: {e}")
+            warnings.append(f"⚠️ No se pudo consultar ACS: {e}")
     for app in pending:
         info = (managed or {}).get(app["name"]) if managed is not None else None
         app["acs"] = None if managed is None else bool(info and info.get("splunkbaseID"))
         if info and info.get("splunkbaseID") and not app["splunkbase_id"]:
             app["splunkbase_id"] = str(info["splunkbaseID"])
+    return pending, warnings
 
+
+def list_pending(service, client, log=print):
+    """Muestra las actualizaciones pendientes del cliente (ver pending_with_acs) y las devuelve."""
+    pending, warnings = pending_with_acs(service, client)
+    for warning in warnings:
+        log(warning)
     if not pending:
         log(f"{client.get('name')}: no hay apps ni add-ons con actualización pendiente.")
         return pending
@@ -83,7 +92,7 @@ def list_pending(service, client, log=print):
         if app["disabled"]:
             notes.append("deshabilitada")
         if app["acs"] is False:
-            notes.append("no gestionable desde ACS (pedir a soporte de Splunk)")
+            notes.append("no gestionable desde ACS (app privada: subir el paquete nuevo o pedirlo a soporte)")
         line = f"  {i:>2}) {app['name']:<{width}}  {app['version'] or '?':>8} → {app['new_version']:<8}"
         log(line + (f"  [{', '.join(notes)}]" if notes else ""))
     return pending
@@ -98,26 +107,30 @@ def backup_versions(service, log=print):
         content = entry.get("content") or {}
         data.append({"name": entry.get("name"), "label": content.get("label"), "version": content.get("version") or "",
                      "disabled": str(content.get("disabled")).lower() in ("1", "true")})
-    path = os.path.join(backup_dir("addons"), f"addons_{host_tag(service)}_backup.json")
+    # Nombre del stack completo (es.cliente), no solo el primer trozo del host, para que los clientes «es.*» no choquen
+    tag = acs.stack_name(getattr(service, "host", "")) or host_tag(service)
+    path = os.path.join(backup_dir("addons"), f"addons_{tag}_backup.json")
     write_backup(path, data)
     log(f"Versiones actuales guardadas en {os.path.basename(path)}")
     return path
 
 
-def update_addons(service, client, names, account=None, dry_run=False, log=print, sleep=time.sleep):
+def update_addons(service, client, names, account=None, dry_run=False, log=print, sleep=time.sleep, stop=None,
+                  progress=None):
     """
     Actualiza las apps pendientes que coinciden con 'names' ('todos' o nombres/comodines) a la versión que Splunk ha
     detectado. 'account' es {"username", "password"} de Splunkbase (si no, se usa la guardada o la del entorno). Con
-    dry_run solo muestra lo que se actualizaría. Devuelve {"updated", "failed", "skipped", "missing"}.
+    dry_run solo muestra lo que se actualizaría. 'stop()' se consulta antes de cada app (cancelación) y
+    'progress(hechas, total, app)' informa del avance. Devuelve {"updated", "failed", "skipped", "missing", "cancelled"}.
     """
-    result = {"updated": [], "failed": [], "skipped": [], "missing": []}
+    result = {"updated": [], "failed": [], "skipped": [], "missing": [], "cancelled": []}
     pending = list_pending(service, client, log)
     chosen, result["missing"] = select_pending(pending, names)
     for name in result["missing"]:
         log(f"· Ninguna actualización pendiente coincide con «{name}».")
     for app in [a for a in chosen if a["acs"] is False]:
-        log(f"· {app['name']} no se puede actualizar desde ACS (no consta como app de Splunkbase): "
-            "pídalo a soporte de Splunk.")
+        log(f"· {app['name']} no se puede actualizar desde ACS (no consta como app de Splunkbase): suba el paquete "
+            "nuevo como app privada o pídalo a soporte de Splunk.")
         result["skipped"].append(app["name"])
     chosen = [a for a in chosen if a["acs"] is not False]
     if not chosen:
@@ -138,8 +151,8 @@ def update_addons(service, client, names, account=None, dry_run=False, log=print
         return result
     account = account or get_account()
     if not account:
-        log("❌ No hay cuenta de Splunkbase: guárdela en config.py (menú de add-ons) o indique SPLUNKBASE_USERNAME y "
-            "SPLUNKBASE_PASSWORD.")
+        log("❌ No hay cuenta de Splunkbase: guárdela en config.py (menú de add-ons o sección Add-ons de la web) o indique "
+            "SPLUNKBASE_USERNAME y SPLUNKBASE_PASSWORD.")
         result["failed"] = [a["name"] for a in chosen]
         return result
     try:
@@ -154,10 +167,16 @@ def update_addons(service, client, names, account=None, dry_run=False, log=print
     except Exception as e:
         log(f"⚠️ No se pudo guardar la lista de versiones actuales: {e}")
 
-    plural = "app" if len(chosen) == 1 else "apps"
-    log(f"Actualizando {len(chosen)} {plural} en {client.get('name')} (de una en una)...")
-    for app in chosen:
+    total = len(chosen)
+    log(f"Actualizando {total} {'app' if total == 1 else 'apps'} en {client.get('name')} (de una en una)...")
+    for position, app in enumerate(chosen):
         name, target = app["name"], app["new_version"]
+        if stop and stop():
+            result["cancelled"] = [a["name"] for a in chosen[position:]]
+            log(f"⏹ Cancelado: no se actualizan {', '.join(result['cancelled'])}.")
+            break
+        if progress:
+            progress(position, total, name)
         started = time.time()
         log(f"▶ {name}: {app['version'] or '?'} → {target}")
         try:
@@ -186,8 +205,10 @@ def update_addons(service, client, names, account=None, dry_run=False, log=print
         except Exception as e:
             log(f"❌ {name}: error inesperado: {e}")
             result["failed"].append(name)
+    if progress:
+        progress(len(result["updated"]) + len(result["failed"]), total, "")
     log(f"Resultado: {len(result['updated'])} actualizadas, {len(result['failed'])} con error, "
-        f"{len(result['skipped'])} omitidas.")
+        f"{len(result['skipped'])} omitidas" + (f", {len(result['cancelled'])} canceladas." if result["cancelled"] else "."))
     return result
 
 

@@ -53,7 +53,7 @@ function lineClass(line) {
 
 const KIND_LABELS = {
   backup: 'Backup', restore: 'Restore', copy: 'Copia entre clientes', report: 'Informe', edit: 'Edición',
-  'app-check': 'Validación de app', 'app-run': 'Ejecución de búsquedas',
+  'app-check': 'Validación de app', 'app-run': 'Ejecución de búsquedas', addons: 'Actualización de add-ons',
 };
 
 function fileHref(path) {

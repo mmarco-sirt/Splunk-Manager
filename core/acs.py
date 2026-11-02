@@ -7,6 +7,8 @@ app de Splunkbase hace falta, además, una sesión de Splunkbase (usuario y cont
 licencia de la app (cabecera ACS-Licensing-Ack con la URL de su licencia).
 Documentación: Admin Config Service Manual → «Manage Splunkbase apps in Splunk Cloud Platform».
 """
+import base64
+import binascii
 import json
 import re
 import time
@@ -48,12 +50,28 @@ def stack_name(host):
     return None
 
 
-def unavailable_reason(client):
+def token_expiry(token):
+    """Caducidad (epoch) de un token JWT de Splunk Cloud, o None si no se puede leer (no es JWT o no caduca)."""
+    parts = str(token or "").split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+        return int(payload["exp"]) if payload.get("exp") else None
+    except (ValueError, TypeError, KeyError, binascii.Error, UnicodeDecodeError):
+        return None
+
+
+def unavailable_reason(client, now=None):
     """Por qué no se puede usar ACS con este cliente, o None si se puede."""
     if not stack_name(client.get("host")):
         return "no es un stack de Splunk Cloud (ACS solo existe en *.splunkcloud.com)"
     if not client.get("splunkToken"):
         return "no tiene token: ACS necesita el token JWT de un usuario con el rol sc_admin"
+    expiry = token_expiry(client["splunkToken"])
+    if expiry and expiry < (time.time() if now is None else now):
+        return (f"el token caducó el {time.strftime('%d/%m/%Y', time.localtime(expiry))}: hay que crear uno nuevo en "
+                "Splunk Cloud y guardarlo en el cliente")
     return None
 
 

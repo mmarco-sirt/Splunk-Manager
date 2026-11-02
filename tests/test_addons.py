@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import io
 import json
@@ -88,6 +89,18 @@ class TestPendingUpdates(unittest.TestCase):
                          "no tiene token: ACS necesita el token JWT de un usuario con el rol sc_admin")
         self.assertIsNone(acs.unavailable_reason(CLIENT))
 
+    def test_expired_token_is_reported(self):
+        def jwt(exp):
+            payload = base64.urlsafe_b64encode(json.dumps({"sub": "u", "exp": exp}).encode()).decode().rstrip("=")
+            return f"eyJhbGciOiJIUzI1NiJ9.{payload}.firma"
+        self.assertEqual(acs.token_expiry(jwt(1700000000)), 1700000000)
+        self.assertIsNone(acs.token_expiry("no-es-jwt"))
+        self.assertIsNone(acs.token_expiry("a.b.c"))
+        expired = {"host": "x.splunkcloud.com", "splunkToken": jwt(1700000000)}
+        self.assertIn("el token caducó el", acs.unavailable_reason(expired, now=1800000000))
+        self.assertIsNone(acs.unavailable_reason(expired, now=1600000000))
+        self.assertIsNone(acs.unavailable_reason({"host": "x.splunkcloud.com", "splunkToken": "opaco"}))
+
     def test_reads_update_fields_from_apps_local(self):
         service = FakeService([entry("search", "1.0"), entry("Splunk_TA_windows", "11.0.3", "12.0.0", 742),
                                entry("TA-cyences", "1.1.1", "1.1.4", 5659, disabled="1")])
@@ -164,7 +177,7 @@ class TestUpdateAddons(unittest.TestCase):
                                   {"name": "Splunk_SA_CIM", "status": "installed", "version": "8.8.0"}])
         result = self.run_update(http, "Splunk_SA_CIM,Splunk_TA_windows")
         self.assertEqual(result, {"updated": ["Splunk_SA_CIM", "Splunk_TA_windows"], "failed": [], "skipped": [],
-                                  "missing": []})
+                                  "missing": [], "cancelled": []})
         patches = http.patches()
         self.assertEqual([p["url"] for p in patches],
                          ["https://admin.splunk.com/cliente/adminconfig/v2/apps/victoria/Splunk_SA_CIM",
@@ -212,11 +225,34 @@ class TestUpdateAddons(unittest.TestCase):
         self.assertEqual(result["failed"], ["phantom", "Splunk_SA_CIM", "Splunk_TA_windows"])
         self.assertEqual(http.calls, [])
 
+    def test_backup_uses_the_full_stack_name(self):
+        service = self.service()
+        service.host = "es.cliente.splunkcloud.com"
+        with mock.patch.object(acs, "_http", FakeHttp(self.acs_apps())):
+            path = addons.backup_versions(service, log=self.output.append)
+        self.assertEqual(os.path.basename(path), "addons_es.cliente_backup.json")
+
     def test_missing_names_are_reported(self):
         http = FakeHttp(self.acs_apps())
         result = self.run_update(http, "no_existe")
-        self.assertEqual(result, {"updated": [], "failed": [], "skipped": [], "missing": ["no_existe"]})
+        self.assertEqual(result, {"updated": [], "failed": [], "skipped": [], "missing": ["no_existe"], "cancelled": []})
         self.assertEqual(http.patches(), [])
+
+    def test_cancel_between_apps_and_progress(self):
+        http = FakeHttp(self.acs_apps())
+        progress, stops = [], iter([False, True])
+        result = self.run_update(http, "Splunk_SA_CIM,Splunk_TA_windows", stop=lambda: next(stops),
+                                 progress=lambda done, total, label: progress.append((done, total, label)))
+        self.assertEqual((result["updated"], result["cancelled"]), (["Splunk_SA_CIM"], ["Splunk_TA_windows"]))
+        self.assertEqual(len(http.patches()), 1)
+        self.assertEqual(progress, [(0, 2, "Splunk_SA_CIM"), (1, 2, "")])
+        self.assertTrue(any(line.startswith("⏹ Cancelado") for line in self.output))
+
+    def test_pending_with_acs_reports_warnings_instead_of_printing(self):
+        pending, warnings = addons.pending_with_acs(self.service(), {"name": "X", "host": "cliente.splunkcloud.com"})
+        self.assertEqual([a["acs"] for a in pending], [None, None, None])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("no tiene token", warnings[0])
 
 
 class TestSplunkbaseAccount(unittest.TestCase):

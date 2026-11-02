@@ -18,6 +18,7 @@ import clients from './views/clients.js';
 import compare from './views/compare.js';
 import multiEdit from './views/multi-edit.js';
 import appValidation from './views/app-validation.js';
+import addons from './views/addons.js';
 import alertAnalysis from './views/alert-analysis.js';
 import reports from './views/reports.js';
 import activity, { openJobDrawer } from './views/activity.js';
@@ -27,7 +28,7 @@ const NAV = [
   { title: 'Objetos', items: [alertsView, alertAnalysis, reportsView, macrosView, lookupsView, dashboardsView] },
   { title: 'Acceso', items: [usersView, rolesView] },
   { title: 'Plataforma', items: [indexesView, ingest, appsView] },
-  { title: 'Gestión', items: [compare, multiEdit, appValidation, reports, backups, batch, clients, activity] },
+  { title: 'Gestión', items: [compare, multiEdit, appValidation, addons, reports, backups, batch, clients, activity] },
 ];
 const VIEWS = new Map(NAV.flatMap((g) => g.items).map((v) => [v.id, v]));
 

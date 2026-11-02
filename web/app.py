@@ -11,8 +11,8 @@ from core.conventions import SIRT_APP, SIRT_APP_LABEL
 from core.paths import backup_dir
 from options.alerts.backup_alerts import TECNOLOGIAS
 from web import (
-    alert_analysis, alert_editor, app_diff, app_packages, app_report, app_validation, compare, dependencies, explorer, lookups,
-    macro_editor, multi_edit, operations, reports, services,
+    addons, alert_analysis, alert_editor, app_diff, app_packages, app_report, app_validation, compare, dependencies, explorer,
+    lookups, macro_editor, multi_edit, operations, reports, services,
 )
 from web.health import monitor as health_monitor
 from web.jobs import install_output_router, jobs
@@ -477,6 +477,37 @@ def create_app(password=None, restrict_host=True):
     def jobs_clear():
         jobs.clear_finished()
         return jsonify(ok=True)
+
+    # --- Add-ons y apps de Splunkbase (ACS) ---
+
+    @app.get("/api/addons/pending")
+    def addons_pending():
+        return jsonify(addons.pending(client_param()))
+
+    @app.get("/api/addons/overview")
+    def addons_overview():
+        names = [n for n in (request.args.get("clients") or "").split(",") if n]
+        return jsonify(addons.overview(names or None))
+
+    @app.post("/api/addons/update")
+    def addons_update():
+        data = body()
+        client = target_clients({"clients": [data.get("client")]})[0]
+        title, action = addons.build_update(client, data.get("names") or [])
+        job = jobs.start(title, "addons", [client], action, cancellable=True)
+        return jsonify(job.summary()), 202
+
+    @app.get("/api/splunkbase-account")
+    def splunkbase_account_get():
+        return jsonify(addons.account_status())
+
+    @app.put("/api/splunkbase-account")
+    def splunkbase_account_save():
+        return jsonify(addons.store_account(body()))
+
+    @app.delete("/api/splunkbase-account")
+    def splunkbase_account_delete():
+        return jsonify(addons.remove_account())
 
     # --- Archivos de backup ---
 
