@@ -10,3 +10,7 @@ clientes = [
     {"name": "CLIENTE_AMBOS_EJEMPLO", "host": "ejemplo3.splunkcloud.com", "username": "admin", "password": "tu_password",
      "splunkToken": "tu_token_aqui", "auth": "token"},
 ]
+
+# Cuenta de Splunkbase (splunk.com) para actualizar apps y add-ons vía ACS; la contraseña también se cifra al arrancar.
+# También se puede guardar desde el menú de add-ons del CLI (opción 21).
+# splunkbase = {"username": "usuario@empresa.com", "password": "tu_password"}

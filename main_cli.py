@@ -11,6 +11,8 @@ import sys
 from core.clients import ensure_config_exists, get_clients_from_config, manage_clients_cli, migrate_config_cli
 from core.connection import select_client, connect_to_splunk
 from core.paths import backup_dir
+from core.splunkbase_account import encrypt_if_plain
+from options.addons.update_addons import update_addons_cli
 from options.alerts.backup_alerts import TECNOLOGIAS, backup_alerts, backup_alerts_especific, backup_alerts_custom, backup_es_use_cases, backup_es_use_cases_custom
 from options.alerts.restore_alerts import restore_alerts
 from options.alerts.list_alerts import list_active_cases
@@ -71,6 +73,12 @@ def interactive():
     backup_dir()  # Asegurar que la carpeta 'backups/' existe
     ensure_config_exists()
     migrate_config_cli()  # Cifra las credenciales que sigan en claro en config.py
+    try:
+        note = encrypt_if_plain()   # Lo mismo con la contraseña de Splunkbase, si la hay
+        if note:
+            print(note)
+    except Exception as e:
+        print(f"⚠️ No se pudo cifrar la contraseña de Splunkbase de config.py: {e}")
 
     clientes = get_clients_from_config()
     if not clientes:
@@ -110,6 +118,7 @@ def interactive():
         print("18) Multi Alert Restore Same Client")
         print("19) Habilitar / Deshabilitar alertas")
         print("20) Análisis de alertas (ruidosas, muertas, planificador)")
+        print("21) Add-ons y apps de Splunkbase: actualizaciones pendientes y actualizar (ACS)")
         print("0) Exit")
 
         choice = input("Ingrese una opción: ")
@@ -188,6 +197,8 @@ def interactive():
             toggle_alerts_cli(service)
         elif choice == "20":
             alert_analysis_cli(service)
+        elif choice == "21":
+            update_addons_cli(service, current_client)
         elif choice == "0":
             print("Saliendo...")
             break

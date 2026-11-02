@@ -22,7 +22,7 @@ from options.roles.backup_roles import backup_roles
 from options.roles.restore_roles import restore_roles
 from options.users.backup_users import backup_users
 from options.users.restore_users import restore_users
-from web.services import ClientError, get_service
+from web.services import ClientError, find_client, get_service
 
 INVALID_LABEL = re.compile(r'[\\/:*?"<>|]')
 SHARING_LEVELS = ("global", "app", "user")
@@ -302,8 +302,11 @@ def diff_backup(folder, filename, old_id, new_id):
     }
 
 
-def run_for_clients(clients, action):
-    """Ejecuta action(service) en cada cliente, conectando si hace falta. Pensado para correr dentro de una tarea."""
+def run_for_clients(clients, action, with_client=False):
+    """
+    Ejecuta action(service) en cada cliente (action(service, cliente) con with_client), conectando si hace falta.
+    Pensado para correr dentro de una tarea.
+    """
     def run():
         for name in clients:
             if len(clients) > 1:
@@ -314,7 +317,10 @@ def run_for_clients(clients, action):
                 print(f"❌ {e}")
                 continue
             try:
-                action(service)
+                if with_client:
+                    action(service, find_client(name))
+                else:
+                    action(service)
             except Exception as e:
                 print(f"❌ Error en {name}: {e}")
     return run

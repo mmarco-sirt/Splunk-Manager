@@ -1,7 +1,7 @@
 """
-Modo no interactivo del CLI, pensado para el Programador de tareas de Windows: backups, informes y habilitar o
-deshabilitar alertas en uno o varios clientes sin preguntar nada. Todo lo que se muestra se guarda también en
-logs/AAAAMMDD-HHMMSS_<acción>.log (se conservan los MAX_LOGS más recientes).
+Modo no interactivo del CLI, pensado para el Programador de tareas de Windows: backups, informes, habilitar o
+deshabilitar alertas y actualizar add-ons de Splunkbase en uno o varios clientes sin preguntar nada. Todo lo que se
+muestra se guarda también en logs/AAAAMMDD-HHMMSS_<acción>.log (se conservan los MAX_LOGS más recientes).
 
 Código de salida: 0 = todo correcto, 1 = alguna operación falló (ver el log), 2 = argumentos o configuración no válidos.
 """
@@ -13,6 +13,8 @@ import traceback
 
 from core.clients import ensure_config_exists, get_clients_from_config, migrate_config
 from core.paths import LOGS_ROOT, logs_dir
+from core.splunkbase_account import ENV_PASSWORD, ENV_USERNAME, encrypt_if_plain, get_account
+from options.addons.update_addons import list_pending, parse_names, update_addons
 from options.alerts.backup_alerts import backup_alerts, backup_es_use_cases
 from options.alerts.toggle_alerts import parse_patterns, set_alerts_enabled
 from options.macros.backup_macros import backup_macros
@@ -45,6 +47,8 @@ Ejemplos:
   main_cli.py --informe --clientes todos --dias 7 --formatos xlsx,pdf
   main_cli.py --informe --por-cliente --clientes CLIENTE1,CLIENTE2 --secciones salud,analisis
   main_cli.py --deshabilitar "CU-AD-001,CU-FW-*" --clientes todos --simular
+  main_cli.py --addons --clientes todos
+  main_cli.py --actualizar-addons "Splunk_TA_windows,Splunk_SA_CIM" --clientes CLIENTE1 --simular
 
 Sin argumentos se abre el menú interactivo. Código de salida: 0 correcto, 1 algo falló (ver logs/), 2 argumentos no válidos.
 """
@@ -69,6 +73,11 @@ def build_parser():
     actions.add_argument("--habilitar", metavar="NOMBRES", help="habilita alertas (separadas por comas; admite comodines: CU-AD-*)")
     actions.add_argument("--deshabilitar", metavar="NOMBRES", help="deshabilita alertas (igual que --habilitar)")
     actions.add_argument("--informe", action="store_true", help="genera un informe en informes/")
+    actions.add_argument("--addons", action="store_true",
+                         help="muestra las apps y add-ons con actualización pendiente en Splunkbase")
+    actions.add_argument("--actualizar-addons", metavar="NOMBRES",
+                         help="actualiza apps/add-ons de Splunkbase vía ACS: 'todos' o nombres separados por comas "
+                              "(admite comodines)")
     actions.add_argument("--listar-clientes", action="store_true", help="muestra los clientes configurados y termina")
     options = parser.add_argument_group("Clientes")
     options.add_argument("-c", "--clientes", metavar="CLIENTES", help="'todos' o nombres separados por comas")
@@ -82,7 +91,11 @@ def build_parser():
                         help="horas sin datos para considerar que una fuente ha dejado de enviar (24)")
     report.add_argument("--por-cliente", action="store_true", help="un informe por cliente en lugar de uno conjunto")
     other = parser.add_argument_group("Otros")
-    other.add_argument("--simular", action="store_true", help="con --habilitar/--deshabilitar: muestra qué cambiaría sin tocar nada")
+    other.add_argument("--simular", action="store_true",
+                       help="con --habilitar/--deshabilitar/--actualizar-addons: muestra qué cambiaría sin tocar nada")
+    other.add_argument("--splunkbase-usuario", metavar="USUARIO",
+                       help=f"cuenta de Splunkbase para --actualizar-addons (contraseña en la variable de entorno "
+                            f"{ENV_PASSWORD}); si no se indica, se usa la guardada en config.py")
     other.add_argument("--sin-log", action="store_true", help="no guardar el log en logs/")
     other.add_argument("-h", "--help", action="help", help="muestra esta ayuda y termina")
     return parser
@@ -150,6 +163,21 @@ def report_options(args):
         raise UsageError("El umbral debe estar entre 1 y 720 horas.")
     return {"sections": list(dict.fromkeys(sections)), "formats": output, "days": args.dias,
             "threshold": args.umbral, "per_client": args.por_cliente}, warnings
+
+
+def resolve_splunkbase_account(args, environ=None):
+    """Cuenta de Splunkbase para --actualizar-addons: --splunkbase-usuario + SPLUNKBASE_PASSWORD o la guardada/entorno."""
+    environ = os.environ if environ is None else environ
+    if args.splunkbase_usuario:
+        password = environ.get(ENV_PASSWORD, "")
+        if not password:
+            raise UsageError(f"Con --splunkbase-usuario la contraseña va en la variable de entorno {ENV_PASSWORD}.")
+        return {"username": args.splunkbase_usuario.strip(), "password": password, "source": "argumentos"}
+    account = get_account()
+    if not account:
+        raise UsageError("No hay cuenta de Splunkbase: guárdela desde el menú interactivo (opción 21), indique "
+                         f"--splunkbase-usuario y {ENV_PASSWORD}, o las variables {ENV_USERNAME} y {ENV_PASSWORD}.")
+    return account
 
 
 # --- Salida: consola + log ------------------------------------------------------------------
@@ -245,6 +273,17 @@ def run_report(names, options):
         run()
 
 
+def run_pending_addons(names):
+    print("\n=== Apps y add-ons con actualización pendiente ===")
+    run_for_clients(names, lambda service, client: list_pending(service, client), with_client=True)()
+
+
+def run_update_addons(names, patterns, dry_run, account):
+    print(f"\n=== Actualizar add-ons: {', '.join(patterns)}{' (simulación)' if dry_run else ''} ===")
+    run_for_clients(names, lambda service, client: update_addons(service, client, patterns, account=account,
+                                                                 dry_run=dry_run), with_client=True)()
+
+
 def _list_clients(clients):
     if not clients:
         print("No hay clientes configurados.")
@@ -263,6 +302,10 @@ def main(argv):
         notes = migrate_config()   # Cifra las credenciales que sigan en claro en config.py
     except Exception as e:
         notes = [f"❌ No se pudieron cifrar las credenciales de config.py: {e}"]
+    try:
+        notes += [n for n in [encrypt_if_plain()] if n]
+    except Exception as e:
+        notes.append(f"⚠️ No se pudo cifrar la contraseña de Splunkbase de config.py: {e}")
     all_clients = get_clients_from_config()
     if args.listar_clientes:
         for note in notes:
@@ -277,17 +320,22 @@ def main(argv):
         enable = parse_patterns(args.habilitar) if args.habilitar else []
         disable = parse_patterns(args.deshabilitar) if args.deshabilitar else []
         report, report_warnings = report_options(args) if args.informe else (None, [])
-        if not (kinds or enable or disable or report):
-            raise UsageError("Indique al menos una acción: --backup, --habilitar, --deshabilitar o --informe (ver --help).")
-        if args.simular and not (enable or disable):
-            raise UsageError("--simular solo se usa con --habilitar o --deshabilitar.")
+        addons = parse_names(args.actualizar_addons) if args.actualizar_addons else []
+        if args.actualizar_addons and not addons:
+            raise UsageError("Indique qué actualizar con --actualizar-addons: todos o nombres separados por comas.")
+        if not (kinds or enable or disable or report or args.addons or addons):
+            raise UsageError("Indique al menos una acción: --backup, --habilitar, --deshabilitar, --informe, --addons "
+                             "o --actualizar-addons (ver --help).")
+        if args.simular and not (enable or disable or addons):
+            raise UsageError("--simular solo se usa con --habilitar, --deshabilitar o --actualizar-addons.")
+        account = resolve_splunkbase_account(args) if addons and not args.simular else None
         names = resolve_clients(args.clientes, args.excluir, all_clients)
     except UsageError as e:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_USAGE
 
     label = "+".join(a for a, on in (("backup", kinds), ("habilitar", enable), ("deshabilitar", disable),
-                                     ("informe", report)) if on)
+                                     ("informe", report), ("addons", args.addons), ("actualizar-addons", addons)) if on)
     log_path = None if args.sin_log else _new_log_path(label)
     log_file = open(log_path, "w", encoding="utf-8") if log_path else None
     original = sys.stdout, sys.stderr
@@ -306,6 +354,10 @@ def main(argv):
             run_toggle(names, enable or disable, bool(enable), args.simular)
         if report:
             run_report(names, report)
+        if args.addons:
+            run_pending_addons(names)
+        if addons:
+            run_update_addons(names, addons, args.simular, account)
     except KeyboardInterrupt:
         print("\n❌ Interrumpido por el usuario.")
     except Exception as e:

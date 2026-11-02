@@ -3,8 +3,9 @@
 Herramienta para administrar varias plataformas Splunk: backup y restore de alertas, macros, usuarios, roles,
 dashboards y reportes (también en modo batch sobre varios clientes), edición de alertas (también en varios clientes a
 la vez), dependencias de cada alerta (macros y lookups), inventario de lookups, análisis de alertas ruidosas y muertas,
-comparación de clientes, validación de versiones de la app de SIRT antes de desplegarlas e informes en Excel/HTML/PDF.
-El CLI se puede programar con el Programador de tareas de Windows para hacer backups e informes automáticos.
+comparación de clientes, validación de versiones de la app de SIRT antes de desplegarlas, informes en Excel/HTML/PDF y
+actualización de apps y add-ons de Splunkbase vía ACS. El CLI se puede programar con el Programador de tareas de Windows
+para hacer backups e informes automáticos.
 
 ## Estructura
 
@@ -22,8 +23,11 @@ core/
   spl.py                 Análisis estático de SPL: macros, lookups, comandos que escriben datos y expansión de macros
   dependencies.py        Dependencias de una búsqueda (macros anidadas y lookups) y si se ven desde su app
   splunk_conf.py         Lectura de .conf/.meta como Splunk (stanzas, continuaciones, duplicados) y de su codificación
+  acs.py                 Admin Config Service (ACS) de Splunk Cloud y API de Splunkbase: apps instaladas y su actualización
+  splunkbase_account.py  Cuenta de Splunkbase guardada en config.py (contraseña cifrada)
 options/
   alerts/                Backup / restore / listado / habilitar y deshabilitar alertas (incl. Enterprise Security)
+  addons/                Apps y add-ons de Splunkbase con actualización pendiente y su actualización vía ACS
   macros/  users/  roles/  dashboards/  reports/
   batch/                 Operaciones sobre varios clientes o varios archivos, y modo no interactivo del CLI
 web/
@@ -239,6 +243,28 @@ que cambian de SPL y las que usan macros que cambian), con la ventana de cada al
 **Exportar informe**: Excel, HTML y PDF en `informes/` (aparecen también en «Informes») con los problemas, los cambios
 respecto a la versión comparada y la validación y ejecución elegidas.
 
+## Actualizar add-ons y apps de Splunkbase (ACS)
+
+Opción **21** del menú del CLI y `--addons` / `--actualizar-addons` en modo no interactivo. Las «pendientes» son las apps
+para las que el propio Splunk ya ha detectado una versión nueva en Splunkbase (el aviso «Update» de Apps → Manage Apps,
+campos `update.*` de `apps/local`). Se actualizan a través del **Admin Config Service (ACS)** de Splunk Cloud
+(`PATCH /adminconfig/v2/apps/victoria/<app>`), igual que lo haría el botón de Splunk Web, de una en una y esperando a que
+ACS termine cada una.
+
+Requisitos:
+- Stack de Splunk Cloud con **Victoria Experience** y el **token** del cliente en `config.py` (`splunkToken`): ACS no
+  admite usuario/contraseña y el usuario del token debe tener el rol `sc_admin`.
+- Una **cuenta de Splunkbase** (usuario y contraseña de splunk.com), con la que ACS descarga la app. Se puede guardar en
+  `config.py` desde la opción 21 (`splunkbase = {...}`; la contraseña se cifra con DPAPI como las demás), indicarla con
+  las variables de entorno `SPLUNKBASE_USERNAME` y `SPLUNKBASE_PASSWORD`, o con `--splunkbase-usuario` más
+  `SPLUNKBASE_PASSWORD`.
+
+Antes de actualizar se guarda en `backups/addons/addons_<host>_backup.json` (con historial) la lista de apps con su
+versión, por si hay que volver a una versión anterior (ACS permite instalar una versión concreta). Las apps que no constan
+en ACS como de Splunkbase (instaladas por soporte de Splunk) se muestran pero no se pueden actualizar desde aquí, y los
+saltos de versión mayor (11.x → 12.0) se marcan para revisar antes sus notas de la versión. Si la licencia que espera ACS
+no es la que publica Splunkbase, se repite la petición con la que indica ACS.
+
 ## Historial de backups
 
 Cada backup (desde la web o el CLI) guarda además una copia con fecha en
@@ -292,6 +318,9 @@ main_cli.py --backup todo --clientes todos --excluir PRUEBAS        # alertas, e
 main_cli.py --informe --clientes todos --dias 7                     # informe semanal (Excel + PDF) de todos
 main_cli.py --informe --por-cliente --clientes CLI1,CLI2 --secciones salud,analisis --formatos xlsx,pdf
 main_cli.py --deshabilitar "CU-AD-001,CU-FW-*" --clientes todos --simular    # qué se deshabilitaría
+main_cli.py --addons --clientes todos                              # apps y add-ons con actualización pendiente
+main_cli.py --actualizar-addons "Splunk_TA_windows,TA-*" --clientes CLI1 --simular   # qué se actualizaría
+main_cli.py --actualizar-addons todos --clientes CLI1              # actualiza con la cuenta de Splunkbase de config.py
 main_cli.py --listar-clientes
 ```
 
@@ -304,6 +333,10 @@ main_cli.py --listar-clientes
 - **Habilitar / deshabilitar** (`--habilitar`, `--deshabilitar`): nombres separados por comas, con comodines
   (`CU-AD-*`, `TEST - CU-*`), en todas las apps y usuarios; `--simular` muestra lo que cambiaría sin tocar nada. Antes de cambiar nada se guarda la configuración en
   el backup «antes_de_editar». También está en el menú interactivo (opción 19), junto al análisis de alertas (opción 20).
+- **Add-ons** (`--addons`, `--actualizar-addons`): apps y add-ons de Splunkbase pendientes de actualizar y su
+  actualización vía ACS (ver «Actualizar add-ons y apps de Splunkbase»); `--simular` muestra qué se actualizaría. La
+  cuenta de Splunkbase sale de `config.py`, de `SPLUNKBASE_USERNAME`/`SPLUNKBASE_PASSWORD` o de `--splunkbase-usuario`
+  más `SPLUNKBASE_PASSWORD`. En el menú interactivo es la opción 21.
 - Todo lo que se muestra se guarda en `logs/AAAAMMDD-HHMMSS_<acción>.log` (se conservan los 200 últimos; `--sin-log` lo
   desactiva). **Código de salida**: 0 correcto, 1 algún cliente u operación falló (ver el log), 2 argumentos no válidos.
   El Programador de tareas lo muestra en «Resultado de la última ejecución».
