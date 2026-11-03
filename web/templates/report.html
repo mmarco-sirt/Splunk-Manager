@@ -282,6 +282,56 @@
       </table>
     {% endif %}
 
+    {% if c.platform %}{% set p = c.platform %}
+      <h3>Plataforma</h3>
+      {% for key, message in p.errors.items() %}<p class="muted">No disponible ({{ key }}): {{ message }}</p>{% endfor %}
+      <div class="tiles four">
+        <div class="tile"><div class="label">Tipo</div><div class="value">{{ {'cloud': 'Splunk Cloud', 'enterprise': 'Enterprise'}.get(p.info.kind, '—') }}</div>
+          <div class="sub">{% if p.stack %}{{ p.stack.experience|capitalize }} · {{ p.stack.version }} · {{ p.stack.status }}{% elif p.info.acs %}ACS disponible{% else %}{{ p.info.reason or 'sin ACS' }}{% endif %}</div></div>
+        <div class="tile"><div class="label">Token de acceso</div>
+          <div class="value">{% if p.token.expiry %}{{ p.token.expiry|time }}{% elif p.token.present %}Sin caducidad{% else %}—{% endif %}</div>
+          <div class="sub">{% if p.token.level == 'expired' %}<span class="delta-down">caducado</span>{% elif p.token.level in ('serious', 'warning') %}<span class="delta-up">caduca pronto</span>{% elif p.token.present %}caducidad{% else %}sin token{% endif %}</div></div>
+        <div class="tile"><div class="label">Reinicio pendiente</div><div class="value">{% if p.stack %}{{ 'Sí' if p.stack.restart_required else 'No' }}{% else %}—{% endif %}</div>
+          <div class="sub">{{ p.pending_addons|length }} add-ons pendientes</div></div>
+        <div class="tile"><div class="label">Próxima ventana</div><div class="value">{% if p.next_window %}{{ p.next_window.start|time }}{% else %}—{% endif %}</div>
+          <div class="sub">{% if p.next_window %}{{ p.next_window.type }}{% if p.next_window.zero_downtime %} · sin corte{% endif %}{% elif p.info.acs %}ninguna en 30 días{% endif %}
+            {% if p.active_freezes %} · change freeze hasta {{ p.active_freezes[0].end }}{% endif %}</div></div>
+      </div>
+      {% if p.pending_addons %}
+      <table>
+        <thead><tr><th>Add-on pendiente</th><th>Instalada</th><th>Nueva</th><th>Notas</th></tr></thead>
+        <tbody>{% for a in p.pending_addons %}<tr><td class="wrap">{{ a.label }} <span class="muted">{{ a.name }}</span></td><td>{{ a.version or '—' }}</td><td>{{ a.new_version }}</td>
+          <td>{% if a.major %}versión mayor{% endif %}{% if a.disabled %} deshabilitada{% endif %}</td></tr>{% endfor %}</tbody>
+      </table>
+      {% endif %}
+      {% if p.hec %}
+      <table>
+        <thead><tr><th>Token HEC</th><th>Índice por defecto</th><th>Índices permitidos</th><th>Estado</th><th>Avisos</th></tr></thead>
+        <tbody>{% for t in p.hec %}<tr><td>{{ t.name }}</td><td>{{ t.default_index or '—' }}</td><td class="wrap">{{ t.allowed_indexes|join(', ') or '—' }}</td>
+          <td>{{ 'Deshabilitado' if t.disabled else 'Habilitado' }}</td><td class="wrap">{{ t.warnings|join('; ') }}</td></tr>{% endfor %}</tbody>
+      </table>
+      {% endif %}
+      {% if p.allowlists %}
+      <table>
+        <thead><tr><th>Lista de IP</th><th class="num">Subredes</th><th>Contenido</th></tr></thead>
+        <tbody>{% for a in p.allowlists if a.subnets %}<tr><td>{{ a.label }} <span class="muted">IPv{{ a.version }}</span></td><td class="num">{{ a.subnets|length }}</td><td class="wrap"><code>{{ a.subnets|join(', ') }}</code></td></tr>{% endfor %}</tbody>
+      </table>
+      {% endif %}
+      {% if p.outbound %}
+      <table>
+        <thead><tr><th>Puerto de salida</th><th>Destinos</th></tr></thead>
+        <tbody>{% for o in p.outbound %}<tr><td>{{ o.port }} <span class="muted">IPv{{ o.version }}</span></td><td class="wrap"><code>{{ o.subnets|join(', ') }}</code></td></tr>{% endfor %}</tbody>
+      </table>
+      {% endif %}
+      {% if p.tokens %}
+      <table>
+        <thead><tr><th>Token de acceso</th><th>Audiencia</th><th>Estado</th><th>Caduca</th><th>Último uso</th></tr></thead>
+        <tbody>{% for t in p.tokens %}<tr><td>{{ t.user }}</td><td>{{ t.audience }}</td><td>{{ t.status }}</td>
+          <td class="nowrap {{ 'delta-down' if t.level == 'expired' else 'delta-up' if t.level in ('serious', 'warning') else '' }}">{{ t.expires_on|time }}</td><td class="nowrap">{{ t.last_used|time }}</td></tr>{% endfor %}</tbody>
+      </table>
+      {% endif %}
+    {% endif %}
+
     {% if c.users %}
       <h3>Usuarios ({{ c.users.users|length }})</h3>
       <table>

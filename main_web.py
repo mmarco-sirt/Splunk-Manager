@@ -4,6 +4,7 @@ import sys
 import threading
 import webbrowser
 
+from core import audit
 from web.app import LOOPBACK_HOSTS, create_app
 
 PASSWORD_ENV = "SPLUNK_MANAGER_PASSWORD"
@@ -25,6 +26,7 @@ def main():
               f"de entorno {PASSWORD_ENV}.")
         sys.exit(1)
 
+    audit.set_source("web")
     app = create_app(password=password, restrict_host=local_only)
     url = f"http://{'127.0.0.1' if local_only else args.host}:{args.port}/"
     print(f"Splunk Manager web disponible en {url}  (Ctrl+C para salir)")

@@ -2,7 +2,7 @@
 import threading
 import time
 
-from core import vault
+from core import acs, vault
 from core.clients import (
     AUTH_METHODS, credential_problems, get_clients_from_config, preferred_auth, save_clients_to_config,
 )
@@ -12,6 +12,7 @@ from web.jobs import capture_output
 CLIENT_FIELDS = ("name", "host", "username", "password", "splunkToken", "sirt_app")
 
 _services = {}   # nombre de cliente -> {"service", "connected_at", "info", "method"}
+_platforms = {}  # nombre de cliente -> {"experience", "version", "status", "restart_required", "at"} (estado del stack vía ACS)
 _connect_locks = {}
 _lock = threading.Lock()
 
@@ -39,7 +40,47 @@ def public_client(client):
         "connected_at": conn["connected_at"] if conn else None,
         "connected_with": conn["method"] if conn else None,
         "info": conn["info"] if conn else None,
+        "platform": platform_of(client, conn["info"] if conn else None),
     }
+
+
+def platform_of(client, info=None):
+    """
+    Qué es el cliente y qué admite: {kind: cloud/enterprise/unknown, stack, acs, reason, token_expiry, experience
+    (victoria/classic si se ha consultado ACS), stack_version, restart_required}.
+    """
+    data = acs.client_platform(client, info)
+    status = _platforms.get(client.get("name"))
+    data["experience"] = status["experience"] if status else None
+    data["stack_version"] = status["version"] if status else None
+    data["restart_required"] = status["restart_required"] if status else None
+    data["status_at"] = status["at"] if status else None
+    return data
+
+
+def stack_status(name, force=False, max_age=600):
+    """Estado del stack vía ACS (experiencia, versión, reinicio pendiente), con caché de 'max_age' segundos."""
+    client = find_client(name)
+    cached = _platforms.get(name)
+    if cached and not force and time.time() - cached["at"] < max_age:
+        return cached
+    status = acs.stack_status(client)
+    status["at"] = time.time()
+    with _lock:
+        _platforms[name] = status
+    return status
+
+
+def client_for_service(service):
+    """Cliente de config.py al que pertenece una conexión (por su host), o None."""
+    host = str(getattr(service, "host", "") or "").lower()
+    for name, conn in list(_services.items()):
+        if conn["service"] is service:
+            try:
+                return find_client(name)
+            except ClientError:
+                break
+    return next((c for c in get_clients_from_config() if str(c.get("host", "")).lower() == host), None)
 
 
 def list_clients():
@@ -198,6 +239,21 @@ def update_client(name, data):
     _save(clients)
     disconnect(name)
     return public_client(current)
+
+
+def store_token(name, token):
+    """Guarda un token nuevo en el cliente (cifrado) sin tocar el resto; p. ej. al renovarlo desde ACS."""
+    clients = get_clients_from_config()
+    index = next((i for i, c in enumerate(clients) if c.get("name") == name), None)
+    if index is None:
+        raise ClientError(f"No existe el cliente '{name}'.")
+    if not token:
+        raise ClientError("El token está vacío.")
+    clients[index]["splunkToken"] = str(token).strip()
+    _save(clients)
+    disconnect(name)
+    _platforms.pop(name, None)
+    return public_client(clients[index])
 
 
 def delete_client(name):

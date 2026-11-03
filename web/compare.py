@@ -12,6 +12,7 @@ import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
+from core import acs, audit
 from core.backup_files import VOLATILE_FIELDS, write_backup
 from core.conventions import is_cu_alert, is_test_alert, strip_test_prefix
 from core.knowledge import acl_of, all_macros, all_saved_searches
@@ -193,6 +194,105 @@ def _users(service):
     } for u in list_users(service)}
 
 
+# --- Tipos que se leen por ACS (necesitan el cliente de config.py, no solo la conexión) ---------
+
+def _hec(service, client):
+    from web.hec import annotate, index_names
+    rows = acs.list_hec(client)
+    try:
+        annotate(rows, index_names(service))
+    except Exception:
+        pass
+    items = {}
+    for r in rows:
+        items[r["name"]] = {
+            "entry": r,   # con el valor del token, para poder recrearlo igual en el destino
+            "compare": {"default_index": r["default_index"], "allowed_indexes": _text(r["allowed_indexes"]),
+                        "default_source": r["default_source"], "default_sourcetype": r["default_sourcetype"],
+                        "disabled": _text(r["disabled"]), "use_ack": _text(r["use_ack"]), "meta": r["meta"]},
+            "summary": {"default_index": r["default_index"], "disabled": r["disabled"], "warnings": r.get("warnings") or []},
+        }
+    return items
+
+
+def _allowlists(service, client):
+    from web.access import inventory
+    data = inventory(client["name"])
+    items = {}
+    for a in data["allowlists"]:
+        if a["error"]:
+            continue
+        key = f"{a['label']} · IPv{a['version']}"
+        items[key] = {
+            "entry": {"feature": a["feature"], "version": a["version"], "subnets": a["subnets"]},
+            "compare": {"subnets": _text(a["subnets"])},
+            "summary": {"count": len(a["subnets"]), "feature": a["feature"], "version": a["version"]},
+        }
+    return items
+
+
+def _outbound(service, client):
+    from web.access import inventory
+    data = inventory(client["name"])
+    items = {}
+    for p in data["outbound"]:
+        key = f"Puerto {p['port']} · IPv{p['version']}"
+        items[key] = {
+            "entry": {"port": p["port"], "version": p["version"], "subnets": p["subnets"]},
+            "compare": {"subnets": _text(p["subnets"])},
+            "summary": {"count": len(p["subnets"]), "port": p["port"], "version": p["version"]},
+        }
+    return items
+
+
+def _copy_hec(service, client, entries, existing):
+    """Crea (con el mismo token) o actualiza cada token HEC en el destino."""
+    for entry in entries:
+        name = entry["name"]
+        changes = {k: entry.get(k) for k in acs.HEC_FIELDS}
+        try:
+            if name in existing:
+                acs.update_hec(client, name, changes)
+                acs.wait_for_hec(client, name, expected={"disabled": changes["disabled"], "default_index": changes["default_index"]})
+                print(f"✅ {name}: actualizado")
+            else:
+                acs.create_hec(client, {**changes, "name": name, "token": entry.get("token") or ""})
+                acs.wait_for_hec(client, name)
+                print(f"✅ {name}: creado{' con el mismo valor de token' if entry.get('token') else ''}")
+            audit.record("hec.copy", f"Copiar token HEC «{name}»", client["name"])
+        except acs.AcsError as e:
+            print(f"❌ {name}: {e}")
+
+
+def _copy_subnets(service, client, entries, existing):
+    """Añade en el destino las subredes de la referencia que le falten (nunca quita ninguna)."""
+    for entry in entries:
+        v6 = entry.get("version") == 6
+        if "feature" in entry:
+            key = next((k for k, v in existing.items() if v["entry"]["feature"] == entry["feature"] and v["entry"]["version"] == entry["version"]), None)
+            label = f"{acs.ALLOWLIST_FEATURES.get(entry['feature'], entry['feature'])} IPv{entry['version']}"
+        else:
+            key = next((k for k, v in existing.items() if v["entry"]["port"] == entry["port"] and v["entry"]["version"] == entry["version"]), None)
+            label = f"puerto {entry['port']} IPv{entry['version']}"
+        current = set(existing[key]["entry"]["subnets"]) if key else set()
+        missing = [s for s in entry["subnets"] if s not in current]
+        if not missing:
+            print(f"· {label}: ya tiene todas las subredes")
+            continue
+        try:
+            if "feature" in entry:
+                result = acs.add_allowlist(client, entry["feature"], missing, v6=v6)
+                audit.record("allowlist.add", f"Copiar subredes a la lista de {label}", client["name"], {"subnets": missing})
+            else:
+                result = acs.add_outbound_port(client, entry["port"], missing, "Copiado con Splunk Manager", v6=v6)
+                audit.record("outbound.add", f"Copiar subredes al {label}", client["name"], {"subnets": missing})
+            for warning in (result or {}).get("warnings") or []:
+                print(f"⚠️ ACS avisa: {warning}")
+            print(f"✅ {label}: añadidas {', '.join(missing)}")
+        except acs.AcsError as e:
+            print(f"❌ {label}: {e}")
+
+
 TYPES = {
     "alerts": {"label": "Alertas", "fetch": lambda svc: _saved_searches(svc, True), "folder": "alertas", "main": MAIN_SAVED_SEARCH_FIELDS,
                "pair": True},
@@ -204,12 +304,23 @@ TYPES = {
     "users": {"label": "Usuarios", "fetch": _users, "folder": None},
     "indexes": {"label": "Índices", "fetch": _indexes, "folder": None},
     "apps": {"label": "Apps", "fetch": _apps, "folder": None},
+    "hec": {"label": "Tokens HEC", "fetch": _hec, "folder": "hec", "client": True, "copy": _copy_hec, "acs": True},
+    "allowlists": {"label": "Listas de IP", "fetch": _allowlists, "folder": "acceso", "client": True, "copy": _copy_subnets, "acs": True},
+    "outbound": {"label": "Puertos de salida", "fetch": _outbound, "folder": "acceso", "client": True, "copy": _copy_subnets, "acs": True},
 }
 
 
 def types_meta():
-    return {k: {"label": v["label"], "copy": bool(v["folder"]), "has_main": bool(v.get("main")), "pair": bool(v.get("pair"))}
+    return {k: {"label": v["label"], "copy": bool(v["folder"]), "has_main": bool(v.get("main")), "pair": bool(v.get("pair")),
+                "acs": bool(v.get("acs"))}
             for k, v in TYPES.items()}
+
+
+def _read(spec, name):
+    """Lee el tipo en un cliente; los tipos de ACS reciben también el cliente de config.py."""
+    if spec.get("client"):
+        return spec["fetch"](services.get_service(name), services.find_client(name))
+    return spec["fetch"](services.get_service(name))
 
 
 def _type(kind):
@@ -220,11 +331,11 @@ def _type(kind):
 
 def _fetch_all(kind, names):
     """Lee el tipo de objeto en varios clientes en paralelo. Devuelve ({cliente: items}, {cliente: error})."""
-    fetch = _type(kind)["fetch"]
+    spec = _type(kind)
 
     def one(name):
         try:
-            return name, fetch(services.get_service(name)), None
+            return name, _read(spec, name), None
         except Exception as e:
             return name, None, str(e)
 
@@ -318,6 +429,8 @@ def _backup_existing(service, kind, folder, existing, keys):
     present = [k for k in keys if k in existing]
     if not present:
         return
+    if folder == "acceso":
+        return   # las subredes solo se añaden, nunca se quitan: no hay nada que deshacer
     if folder == "dashboards":
         for key in present:
             backup_dashboard(service, existing[key]["entry"]["name"])
@@ -348,7 +461,7 @@ def build_copy(kind, source, targets, names, options):
 
     def run():
         print(f"▶ Leyendo {spec['label'].lower()} de {source}…")
-        source_items = spec["fetch"](services.get_service(source))
+        source_items = _read(spec, source)
         missing = [n for n in names if n not in source_items]
         if missing:
             print(f"[ADVERTENCIA] No existen en {source}: {', '.join(missing)}")
@@ -361,9 +474,16 @@ def build_copy(kind, source, targets, names, options):
             print(f"\n━━━━━━━━━━ {target} ━━━━━━━━━━")
             try:
                 service = services.get_service(target)
-                _backup_existing(service, kind, folder, spec["fetch"](service), keys)
+                existing = _read(spec, target)
+                _backup_existing(service, kind, folder, existing, keys)
             except Exception as e:
                 print(f"❌ Error en {target}: {e}")
+                continue
+            if spec.get("copy"):
+                try:
+                    spec["copy"](service, services.find_client(target), [source_items[k]["entry"] for k in keys], existing)
+                except Exception as e:
+                    print(f"❌ Error al copiar en {target}: {e}")
                 continue
             temp_dir = tempfile.mkdtemp(prefix="splunk_manager_copy_")
             try:

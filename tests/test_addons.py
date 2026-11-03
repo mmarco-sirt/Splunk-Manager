@@ -49,8 +49,8 @@ class FakeHttp:
         self.login_status = login_status
         self.license_url = license_url
 
-    def __call__(self, method, url, headers=None, data=None, timeout=60):
-        self.calls.append({"method": method, "url": url, "headers": dict(headers or {}), "data": data})
+    def __call__(self, method, url, headers=None, data=None, timeout=60, json_body=None, raw=False):
+        self.calls.append({"method": method, "url": url, "headers": dict(headers or {}), "data": data, "json": json_body})
         if "account:login" in url:
             return self.login_status, LOGIN_XML if self.login_status == 200 else "denied"
         if "splunkbase.splunk.com/api/v1/app/" in url:

@@ -3,7 +3,7 @@ import { get } from '../api.js';
 import { state, navigate, invalidate } from '../core.js';
 import {
   h, append, clear, icon, button, badge, pageHeader, segmented, DataTable, openDrawer, confirmDialog, toast, kv, section,
-  codeBlock, errorBox, infoBox, fmtNum, fmtRelative, fmtDuration, withBusy,
+  codeBlock, errorBox, infoBox, fmtNum, fmtRelative, fmtDuration, withBusy, fmtDate,
 } from '../ui.js';
 import { columnChart, sparkline } from '../charts.js';
 import { openEditor, openBulkEditor, setEnabled, mergeRows, describeCron } from '../alert-editor.js';
@@ -301,7 +301,8 @@ export default {
             key: 'skipped', label: 'Saltadas', className: 'num', defaultDir: 'desc', sort: (a) => a.stats.skipped,
             render: (a) => {
               const attempts = a.stats.runs + a.stats.skipped + a.stats.errors;
-              return h('div', {}, fmtNum(a.stats.skipped), attempts ? h('div', { class: 'cell-sub' }, pct(a.stats.skipped / attempts)) : null);
+              return h('div', {}, fmtNum(a.stats.skipped), attempts ? h('div', { class: 'cell-sub' }, pct(a.stats.skipped / attempts)) : null,
+                a.stats.skipped_in_maintenance ? h('div', {}, badge(`${fmtNum(a.stats.skipped_in_maintenance)} en mantenimiento`, 'outline', 'calendar')) : null);
             },
           },
           num('errors', 'Errores', (a) => a.stats.errors),
@@ -401,8 +402,16 @@ export default {
       renderTabs();
       renderTable();
 
+      const mw = data.maintenance;
+      const maintenanceNote = mw?.windows?.length
+        ? infoBox([h('strong', {}, `${mw.windows.length === 1 ? 'Una ventana' : `${mw.windows.length} ventanas`} de mantenimiento de Splunk en el periodo: `),
+          mw.windows.map((w) => `${fmtDate(w.start)}${w.end ? ` → ${fmtDate(w.end)}` : ''} (${w.type}${w.zero_downtime ? ', sin corte' : ''})`).join(' · '),
+          '. Los saltos del planificador de esos días pueden deberse al mantenimiento; en la pestaña Planificador se indican.'], '')
+        : mw?.error ? infoBox(`No se pudieron consultar las ventanas de mantenimiento (ACS): ${mw.error}`, 'warn-box') : null;
+
       append(clear(body), [
         tiles,
+        maintenanceNote,
         chart,
         h('section', { class: 'card', style: { marginTop: '16px' } },
           h('div', { class: 'card-header' }, h('div', {},

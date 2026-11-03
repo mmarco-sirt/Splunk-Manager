@@ -137,7 +137,7 @@ export function invalidate(client = state.client, resources = null) {
 
 const RESTORE_RESOURCES = {
   alertas: ['saved-searches'], reportes: ['saved-searches'], macros: ['macros'],
-  users: ['users'], roles: ['roles'], dashboards: ['dashboards'],
+  users: ['users'], roles: ['roles'], dashboards: ['dashboards'], hec: [], acceso: [],
 };
 
 let pollTimer = null;

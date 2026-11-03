@@ -48,7 +48,15 @@ BACKUP_FOLDERS = {
               "restore": lambda svc, path, opts: restore_roles(svc, path)},
     "dashboards": {"label": "Dashboards", "prefix": "", "key": None,
                    "restore": lambda svc, path, opts: restore_dashboard(svc, path)},
+    "hec": {"label": "Tokens HEC", "prefix": "hec_", "key": "name",
+            "restore": lambda svc, path, opts: _restore_hec(svc, path)},
+    "acceso": {"label": "Listas de IP y puertos", "prefix": "acceso_", "key": None, "restore": None},
 }
+
+
+def _restore_hec(service, path):
+    from web.hec import restore   # importación tardía: web.hec importa este módulo
+    restore(service, path)
 
 
 def _text_option(options, key, what):
@@ -70,6 +78,16 @@ def _names_option(options):
 def _backup_dashboards(service, names):
     for name in names:
         backup_dashboard(service, name)
+
+
+def _backup_hec(service):
+    from web.hec import backup
+    backup(service)
+
+
+def _backup_access(service):
+    from web.access import backup
+    backup(service)
 
 
 def build_backup(kind, options):
@@ -101,6 +119,8 @@ def build_backup(kind, options):
         "users": ("Backup de usuarios", backup_users),
         "roles": ("Backup de roles", backup_roles),
         "reports": ("Backup de reportes", backup_reports),
+        "hec": ("Backup de tokens HEC", _backup_hec),
+        "acceso": ("Backup de listas de IP y puertos de salida", _backup_access),
     }
     if kind in simple:
         return simple[kind]
@@ -140,6 +160,8 @@ def build_restore(folder, files, options):
 
     restore = BACKUP_FOLDERS[folder]["restore"]
     label = BACKUP_FOLDERS[folder]["label"].lower()
+    if restore is None:
+        raise OperationError(f"Los backups de {label} son solo de consulta: las subredes se añaden desde la sección Acceso de red.")
 
     def run(service):
         for path in paths:

@@ -5,6 +5,7 @@ import {
   h, clear, icon, button, badge, pageHeader, DataTable, openModal, confirmDialog, toast, statusLabel, fmtRelative, withBusy,
   infoBox, segmented,
 } from '../ui.js';
+import { platformBadges, tokenBadge } from './platform.js';
 
 const METHOD_LABELS = { password: 'Usuario y contraseña', token: 'Token' };
 const FIELD_LABELS = { password: 'la contraseña', splunkToken: 'el token' };
@@ -140,6 +141,13 @@ export function openClientModal(client) {
   });
 }
 
+function levelOf(expiry) {
+  if (!expiry) return null;
+  const days = (expiry - Date.now() / 1000) / 86400;
+  const t = state.meta?.token_warn_days || { warning: 30, serious: 7 };
+  return days < 0 ? 'expired' : days < t.serious ? 'serious' : days < t.warning ? 'warning' : 'ok';
+}
+
 function authCell(c) {
   if (c.auth === 'none') return badge('Sin credenciales', 'bad', 'alert');
   const both = c.methods.length > 1;
@@ -180,13 +188,18 @@ export default {
           { value: 'all', label: 'Todos' },
           { value: 'both', label: 'Con contraseña y token', test: (c) => c.methods.length > 1 },
           { value: 'one', label: 'Un solo método', test: (c) => c.methods.length === 1 },
-          { value: 'problems', label: 'Con problemas', test: (c) => c.auth === 'none' || c.credential_problems?.length > 0 },
+          { value: 'problems', label: 'Con problemas', test: (c) => c.auth === 'none' || c.credential_problems?.length > 0 || ['expired', 'serious'].includes(levelOf(c.platform?.token_expiry)) },
+          { value: 'acs', label: 'Con ACS', test: (c) => c.platform?.acs },
         ],
       }],
       columns: [
         { key: 'name', label: 'Cliente', render: (c) => h('div', {}, h('div', { class: 'cell-main' }, c.name), state.client === c.name ? h('div', { class: 'cell-sub' }, 'Activo') : null) },
         { key: 'host', label: 'Host', render: (c) => h('span', { class: 'mono' }, c.host) },
         { key: 'auth', label: 'Autenticación', sort: (c) => c.methods.length, render: authCell },
+        {
+          key: 'platform', label: 'Plataforma', sort: (c) => `${c.platform?.kind}${c.platform?.acs ? 0 : 1}`,
+          render: (c) => h('div', {}, platformBadges(c.platform), c.has_token ? h('div', { class: 'badges', style: { marginTop: '3px' } }, tokenBadge({ present: true, expiry: c.platform?.token_expiry, level: levelOf(c.platform?.token_expiry) })) : null),
+        },
         { key: 'connected', label: 'Estado', sort: (c) => (c.connected ? 0 : 1), render: stateCell },
         {
           key: 'actions', label: '', className: 'col-actions', sortable: false,

@@ -2,17 +2,18 @@
 import hmac
 import os
 
-from flask import Flask, abort, jsonify, render_template, request, send_file
+from flask import Flask, Response, abort, jsonify, render_template, request, send_file
 from splunklib.binding import AuthenticationError, HTTPError
 from werkzeug.exceptions import HTTPException
 
+from core import acs, audit
 from core.clients import ensure_config_exists, migrate_config
 from core.conventions import SIRT_APP, SIRT_APP_LABEL
 from core.paths import backup_dir
 from options.alerts.backup_alerts import TECNOLOGIAS
 from web import (
-    addons, alert_analysis, alert_editor, app_diff, app_packages, app_report, app_validation, compare, dependencies, explorer,
-    lookups, macro_editor, multi_edit, operations, reports, services,
+    access, addons, alert_analysis, alert_editor, app_diff, app_packages, app_report, app_validation, compare, dependencies,
+    explorer, hec, lookups, macro_editor, multi_edit, operations, platform, reports, services,
 )
 from web.health import monitor as health_monitor
 from web.jobs import install_output_router, jobs
@@ -122,6 +123,9 @@ def create_app(password=None, restrict_host=True):
             analysis_days=list(alert_analysis.ANALYSIS_DAYS),
             sirt_app=SIRT_APP,
             sirt_app_label=SIRT_APP_LABEL,
+            allowlist_features=access.features(),
+            hec_fields=list(hec.EDITABLE),
+            token_warn_days={"warning": platform.TOKEN_WARN_DAYS, "serious": platform.TOKEN_SERIOUS_DAYS},
         )
 
     # --- Clientes ---
@@ -130,9 +134,29 @@ def create_app(password=None, restrict_host=True):
     def clients_list():
         return jsonify(services.list_clients())
 
+    def simulate():
+        """La petición pide solo simular (mostrar lo que se enviaría a ACS sin tocar nada)."""
+        return bool(body().get("simulate")) or request.args.get("simulate") == "1"
+
     @app.post("/api/clients")
     def clients_create():
-        return jsonify(services.create_client(body())), 201
+        data = body()
+        result = services.create_client(data)
+        audit.record("client.create", f"Alta del cliente {result['name']}", result["name"], {"host": result["host"]})
+        return jsonify(result), 201
+
+    @app.get("/api/clients/<path:name>/platform")
+    def clients_platform(name):
+        """Plataforma del cliente: tipo, ACS, token y (si se pide) estado del stack vía ACS."""
+        client = services.find_client(name)
+        info = services.platform_of(client, services.server_info(name))
+        if request.args.get("stack") == "1" and info["acs"]:
+            try:
+                services.stack_status(name, force=request.args.get("force") == "1")
+                info = services.platform_of(client, services.server_info(name))
+            except acs.AcsError as e:
+                info["stack_error"] = str(e)
+        return jsonify(info)
 
     @app.post("/api/clients/test")
     def clients_test():
@@ -140,11 +164,18 @@ def create_app(password=None, restrict_host=True):
 
     @app.put("/api/clients/<path:name>")
     def clients_update(name):
-        return jsonify(services.update_client(name, body()))
+        data = body()
+        result = services.update_client(name, data)
+        audit.record("client.update", f"Modificar el cliente {name}", result["name"],
+                     {"host": result["host"], "renamed": result["name"] if result["name"] != name else None,
+                      "password": "cambiada" if data.get("password") else ("quitada" if data.get("clear_password") else None),
+                      "token": "cambiado" if data.get("splunkToken") else ("quitado" if data.get("clear_token") else None)})
+        return jsonify(result)
 
     @app.delete("/api/clients/<path:name>")
     def clients_delete(name):
         services.delete_client(name)
+        audit.record("client.delete", f"Baja del cliente {name}", name)
         return jsonify(ok=True)
 
     @app.post("/api/clients/<path:name>/connect")
@@ -169,9 +200,13 @@ def create_app(password=None, restrict_host=True):
     @app.post("/api/splunk/saved-searches/action")
     def saved_search_action():
         data = body()
-        service = services.get_service(client_param())
-        return jsonify(explorer.saved_search_action(
-            service, data.get("name"), data.get("app"), data.get("owner"), data.get("action"), data.get("sharing")))
+        client = client_param()
+        service = services.get_service(client)
+        result = explorer.saved_search_action(
+            service, data.get("name"), data.get("app"), data.get("owner"), data.get("action"), data.get("sharing"))
+        audit.record(f"alert.{data.get('action')}", f"{str(data.get('action') or '').capitalize()} «{data.get('name')}»", client,
+                     {"app": data.get("app"), "owner": data.get("owner")})
+        return jsonify(result)
 
     @app.get("/api/splunk/saved-searches/detail")
     def saved_search_detail():
@@ -183,15 +218,24 @@ def create_app(password=None, restrict_host=True):
     @app.post("/api/splunk/saved-searches/update")
     def saved_search_update():
         data = body()
-        service = services.get_service(client_param())
-        return jsonify(alert_editor.update_saved_search(
-            service, data.get("name"), data.get("app"), data.get("owner"), data.get("changes"), data.get("sharing")))
+        client = client_param()
+        service = services.get_service(client)
+        result = alert_editor.update_saved_search(
+            service, data.get("name"), data.get("app"), data.get("owner"), data.get("changes"), data.get("sharing"))
+        audit.record("alert.update", f"Editar «{data.get('name')}»", client,
+                     {"app": data.get("app"), "fields": sorted((data.get("changes") or {}).keys())})
+        return jsonify(result)
 
     @app.post("/api/splunk/saved-searches/bulk-update")
     def saved_search_bulk_update():
         data = body()
-        service = services.get_service(client_param())
-        return jsonify(alert_editor.bulk_update(service, data.get("items") or [], data.get("changes")))
+        client = client_param()
+        service = services.get_service(client)
+        items = data.get("items") or []
+        result = alert_editor.bulk_update(service, items, data.get("changes"))
+        audit.record("alert.bulk-update", f"Editar en bloque {len(items)} alertas o reportes", client,
+                     {"names": [i.get("name") for i in items], "fields": sorted((data.get("changes") or {}).keys())})
+        return jsonify(result)
 
     @app.get("/api/splunk/saved-searches/dependencies")
     def saved_search_dependencies():
@@ -222,15 +266,24 @@ def create_app(password=None, restrict_host=True):
     @app.post("/api/splunk/macros/update")
     def macro_update():
         data = body()
-        service = services.get_service(client_param())
-        return jsonify(macro_editor.update_macro(
-            service, data.get("name"), data.get("app"), data.get("owner"), data.get("changes"), data.get("sharing")))
+        client = client_param()
+        service = services.get_service(client)
+        result = macro_editor.update_macro(
+            service, data.get("name"), data.get("app"), data.get("owner"), data.get("changes"), data.get("sharing"))
+        audit.record("macro.update", f"Editar la macro «{data.get('name')}»", client,
+                     {"app": data.get("app"), "fields": sorted((data.get("changes") or {}).keys())})
+        return jsonify(result)
 
     @app.post("/api/splunk/macros/bulk-update")
     def macro_bulk_update():
         data = body()
-        service = services.get_service(client_param())
-        return jsonify(macro_editor.bulk_update(service, data.get("items") or [], data.get("changes")))
+        client = client_param()
+        service = services.get_service(client)
+        items = data.get("items") or []
+        result = macro_editor.bulk_update(service, items, data.get("changes"))
+        audit.record("macro.bulk-update", f"Editar en bloque {len(items)} macros", client,
+                     {"names": [i.get("name") for i in items], "fields": sorted((data.get("changes") or {}).keys())})
+        return jsonify(result)
 
     @app.get("/api/ingest")
     def ingest():
@@ -239,8 +292,9 @@ def create_app(password=None, restrict_host=True):
 
     @app.get("/api/alert-analysis")
     def alert_analysis_get():
-        service = services.get_service(client_param())
-        return jsonify(alert_analysis.analyze_alerts(service, int(request.args.get("days", 7))))
+        name = client_param()
+        service = services.get_service(name)
+        return jsonify(alert_analysis.analyze_alerts(service, int(request.args.get("days", 7)), client=services.find_client(name)))
 
     # --- Salud de todos los clientes ---
 
@@ -497,17 +551,168 @@ def create_app(password=None, restrict_host=True):
         job = jobs.start(title, "addons", [client], action, cancellable=True)
         return jsonify(job.summary()), 202
 
+    @app.post("/api/addons/update-many")
+    def addons_update_many():
+        data = body()
+        clients = target_clients(data)
+        title, action = addons.build_update_many(clients, data.get("names") or [], bool(data.get("exclude_major")))
+        job = jobs.start(title, "addons", clients, action, cancellable=True)
+        return jsonify(job.summary()), 202
+
     @app.get("/api/splunkbase-account")
     def splunkbase_account_get():
         return jsonify(addons.account_status())
 
     @app.put("/api/splunkbase-account")
     def splunkbase_account_save():
-        return jsonify(addons.store_account(body()))
+        result = addons.store_account(body())
+        audit.record("splunkbase.account", f"Guardar la cuenta de Splunkbase {result.get('username')}", None)
+        return jsonify(result)
 
     @app.delete("/api/splunkbase-account")
     def splunkbase_account_delete():
+        audit.record("splunkbase.account", "Quitar la cuenta de Splunkbase", None)
         return jsonify(addons.remove_account())
+
+    # --- Tokens HEC (ACS) ---
+
+    @app.get("/api/hec")
+    def hec_list():
+        return jsonify(hec.list_tokens(client_param()))
+
+    @app.get("/api/hec/overview")
+    def hec_overview():
+        names = [n for n in (request.args.get("clients") or "").split(",") if n]
+        return jsonify(hec.overview(names or None))
+
+    @app.get("/api/hec/value")
+    def hec_value():
+        name = request.args.get("name")
+        audit.record("hec.reveal", f"Ver el valor del token HEC «{name}»", client_param())
+        return jsonify(hec.token_value(client_param(), name))
+
+    @app.post("/api/hec")
+    def hec_create():
+        data = body()
+        return jsonify(hec.create(client_param(), data, dry_run=simulate())), 200 if simulate() else 201
+
+    @app.put("/api/hec/<path:name>")
+    def hec_update(name):
+        data = body()
+        return jsonify(hec.update(client_param(), name, data.get("changes") or {}, dry_run=simulate()))
+
+    @app.post("/api/hec/<path:name>/delete")
+    def hec_delete(name):
+        return jsonify(hec.delete(client_param(), name, dry_run=simulate()))
+
+    @app.post("/api/hec/backup")
+    def hec_backup():
+        clients = target_clients(body())
+        title, action = hec.build_backup(clients)
+        job = jobs.start(title, "backup", clients, action, cancellable=True)
+        return jsonify(job.summary()), 202
+
+    # --- Listas de IP y puertos de salida (ACS) ---
+
+    @app.get("/api/access")
+    def access_inventory():
+        return jsonify(access.inventory(client_param()))
+
+    @app.get("/api/access/overview")
+    def access_overview():
+        names = [n for n in (request.args.get("clients") or "").split(",") if n]
+        return jsonify(access.overview(names or None))
+
+    @app.post("/api/access/change")
+    def access_change():
+        data = body()
+        clients = target_clients(data)
+        title, action = access.build_change(data.get("kind"), data.get("action"), clients, data.get("data") or {},
+                                            dry_run=bool(data.get("simulate")))
+        job = jobs.start(title, "access", clients, action, cancellable=True)
+        return jsonify(job.summary()), 202
+
+    @app.post("/api/access/backup")
+    def access_backup():
+        clients = target_clients(body())
+        title, action = operations.build_backup("acceso", {})
+        job = jobs.start(f"{title} · {clients_suffix(clients)}", "backup", clients, operations.run_for_clients(clients, action))
+        return jsonify(job.summary()), 202
+
+    # --- Plataforma: estado, reinicio, mantenimiento, tokens y exportación de apps (ACS) ---
+
+    @app.get("/api/platform/status")
+    def platform_status():
+        return jsonify(platform.status(client_param(), force=request.args.get("force") == "1"))
+
+    @app.get("/api/platform/overview")
+    def platform_overview():
+        names = [n for n in (request.args.get("clients") or "").split(",") if n]
+        return jsonify(platform.overview(names or None))
+
+    @app.post("/api/platform/restart")
+    def platform_restart():
+        client = target_clients({"clients": [body().get("client")]})[0]
+        title, action = platform.build_restart(client, dry_run=simulate())
+        job = jobs.start(title, "platform", [client], action, cancellable=True)
+        return jsonify(job.summary()), 202
+
+    @app.get("/api/platform/tokens")
+    def platform_tokens():
+        return jsonify(platform.tokens(client_param()))
+
+    @app.get("/api/platform/tokens/overview")
+    def platform_tokens_overview():
+        names = [n for n in (request.args.get("clients") or "").split(",") if n]
+        return jsonify(platform.tokens_overview(names or None, with_acs=request.args.get("acs") == "1"))
+
+    @app.post("/api/platform/tokens")
+    def platform_token_create():
+        return jsonify(platform.create_token(client_param(), body(), dry_run=simulate()))
+
+    @app.post("/api/platform/tokens/delete")
+    def platform_token_delete():
+        return jsonify(platform.delete_token(client_param(), body().get("id"), dry_run=simulate()))
+
+    @app.get("/api/platform/exports")
+    def platform_exports():
+        return jsonify(platform.list_exports(client_param()))
+
+    @app.post("/api/platform/exports")
+    def platform_export():
+        data = body()
+        client = target_clients({"clients": [data.get("client")]})[0]
+        title, action = platform.build_export(client, data.get("names") or [], data.get("options") or {})
+        job = jobs.start(title, "export", [client], action, cancellable=True)
+        return jsonify(job.summary()), 202
+
+    @app.get("/api/platform/exports/<name>")
+    def platform_export_download(name):
+        path = platform.export_path(client_param(), name)
+        return send_file(path, as_attachment=True, download_name=name, mimetype="application/gzip")
+
+    @app.delete("/api/platform/exports/<name>")
+    def platform_export_delete(name):
+        path = platform.export_path(client_param(), name)
+        os.remove(path)
+        audit.record("app.export.delete", f"Borrar la exportación {name}", client_param())
+        return jsonify(ok=True)
+
+    # --- Auditoría ---
+
+    @app.get("/api/audit")
+    def audit_list():
+        entries = audit.read(limit=min(int(request.args.get("limit", 500)), audit.MAX_READ), client=request.args.get("client") or None,
+                             action=request.args.get("action") or None, text=request.args.get("text") or None)
+        return jsonify(entries=entries, actions=audit.actions())
+
+    @app.get("/api/audit/export")
+    def audit_export():
+        entries = audit.read(limit=0, client=request.args.get("client") or None, action=request.args.get("action") or None,
+                             text=request.args.get("text") or None)
+        csv_text = "\ufeff" + audit.to_csv(entries)
+        return Response(csv_text, mimetype="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": "attachment; filename=auditoria.csv"})
 
     # --- Archivos de backup ---
 
@@ -550,12 +755,14 @@ def create_app(password=None, restrict_host=True):
         if not os.path.isfile(path):
             abort(404)
         os.remove(path)
+        audit.record("backup.delete", f"Borrar el backup {folder}/{filename}", None)
         return jsonify(ok=True)
 
     @app.post("/api/backups/<folder>")
     def backups_upload(folder):
         data = body()
         name = operations.save_uploaded_backup(folder, data.get("filename"), data.get("content") or "")
+        audit.record("backup.upload", f"Importar el backup {folder}/{name}", None)
         return jsonify(name=name), 201
 
     return app

@@ -9,6 +9,7 @@ import { openRestoreModal, runBackup } from '../ops.js';
 import { mergeRows, ownerText } from '../alert-editor.js';
 import { openMacroEditor, setMacrosEnabled } from '../macro-editor.js';
 import { appFilter, enabledFilter } from '../filters.js';
+import { openExportModal } from './platform.js';
 
 /**
  * Fábrica de vistas de listado con caché por cliente, botón de actualizar y tabla.
@@ -533,11 +534,17 @@ export const indexesView = listView({
 
 export const appsView = listView({
   id: 'apps', title: 'Apps', iconName: 'apps', resource: 'apps',
-  subtitle: () => `Apps y add-ons instalados en ${state.client}.`,
+  subtitle: () => `Apps y add-ons instalados en ${state.client}. En Splunk Cloud se pueden exportar completas (.tgz) vía ACS.`,
+  actions: () => [
+    button('Actualizaciones', { iconName: 'package', onClick: () => navigate('addons') }),
+    button('Exportar apps…', { iconName: 'download', variant: 'primary', onClick: () => openExportModal(state.client), disabled: !state.clients.find((c) => c.name === state.client)?.platform?.acs }),
+  ],
   table: {
     searchText: (a) => `${a.name} ${a.label} ${a.author}`,
     searchPlaceholder: 'Buscar app…',
     initialSort: { key: 'label', dir: 'asc' },
+    selectable: true,
+    selectionActions: [{ label: 'Exportar vía ACS', icon: 'download', onClick: (sel) => openExportModal(state.client, sel.map((a) => a.name)) }],
     filters: [{
       id: 'state',
       options: [

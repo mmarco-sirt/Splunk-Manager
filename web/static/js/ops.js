@@ -13,9 +13,11 @@ export const BACKUP_KINDS = {
   macros: { label: 'Macros', desc: 'Todas las macros con su definición y argumentos.' },
   users: { label: 'Usuarios', desc: 'Usuarios con roles, email y nombre (sin contraseñas).' },
   roles: { label: 'Roles', desc: 'Roles con capacidades, herencia e índices.' },
+  hec: { label: 'Tokens HEC (ACS)', desc: 'Tokens del HTTP Event Collector con su configuración y su valor. Solo en Splunk Cloud con ACS.' },
+  acceso: { label: 'Listas de IP y puertos (ACS)', desc: 'Listas de IP permitidas por funcionalidad y puertos de salida. Solo consulta: no se restauran.' },
 };
 
-export const FOLDER_ICONS = { alertas: 'bell', reportes: 'report', macros: 'braces', users: 'users', roles: 'shield', dashboards: 'dashboard' };
+export const FOLDER_ICONS = { alertas: 'bell', reportes: 'report', macros: 'braces', users: 'users', roles: 'shield', dashboards: 'dashboard', hec: 'inbox', acceso: 'globe' };
 
 export function clientsLabel(clients) {
   return clients.length === 1 ? clients[0] : `${clients.length} clientes`;

@@ -4,11 +4,16 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from core import acs
 from core.conventions import is_cu_alert
 from core.knowledge import ALL_NAMESPACES
 from web import services
 from web.explorer import oneshot_results
 from web.services import ClientError
+
+TOKEN_WARN_DAYS = 30
+TOKEN_SERIOUS_DAYS = 7
+WINDOW_NOTICE_DAYS = 7
 
 CLIENT_WORKERS = 6
 
@@ -91,7 +96,40 @@ def _sources(service):
                   key=lambda r: r["last"])
 
 
-CHECKS = {"alerts": _alerts, "scheduler": _scheduler, "ingest": _ingest, "sources": _sources}
+def _platform(service, client=None):
+    """
+    Plataforma del cliente: tipo (Cloud/Enterprise), token y su caducidad, add-ons con actualización pendiente y, con
+    ACS, estado del stack (experiencia, versión, reinicio pendiente), próxima ventana de mantenimiento y change freezes.
+    Lo que no se pueda consultar va en 'errors' sin invalidar el resto.
+    """
+    client = client or services.client_for_service(service) or {}
+    info = services.server_info(client.get("name")) if client else None
+    data = {**acs.client_platform(client, info), "experience": None, "stack_version": None, "stack_status": None,
+            "restart_required": None, "pending_addons": None, "next_window": None, "active_freezes": [], "errors": {}}
+    try:
+        data["pending_addons"] = len(acs.pending_updates(service))
+    except Exception as e:
+        data["errors"]["addons"] = str(e)
+    if not data["acs"]:
+        return data
+    try:
+        status = services.stack_status(client["name"], force=True)
+        data.update(experience=status["experience"], stack_version=status["version"], stack_status=status["status"],
+                    restart_required=status["restart_required"])
+    except acs.AcsError as e:
+        data["errors"]["stack"] = str(e)
+    try:
+        data["next_window"] = acs.next_window(acs.maintenance_schedules(client))
+    except acs.AcsError as e:
+        data["errors"]["windows"] = str(e)
+    try:
+        data["active_freezes"] = acs.active_freezes(acs.maintenance_preferences(client)["freezes"])
+    except acs.AcsError as e:
+        data["errors"]["freezes"] = str(e)
+    return data
+
+
+CHECKS = {"alerts": _alerts, "scheduler": _scheduler, "ingest": _ingest, "sources": _sources, "platform": _platform}
 
 
 def _run_check(check, service):
@@ -122,7 +160,7 @@ RANK = {"pending": -1, "ok": 0, "info": 0, "warning": 1, "serious": 2, "critical
 LEVEL_LABELS = {"ok": "Correcto", "info": "Info", "warning": "Aviso", "serious": "Problema", "critical": "Crítico",
                 "pending": "Sin analizar"}
 CHECK_LABELS = {"alerts": "las alertas", "scheduler": "el planificador", "ingest": "la ingesta",
-                "sources": "las fuentes de datos"}
+                "sources": "las fuentes de datos", "platform": "la plataforma (ACS)"}
 
 
 def _num(n):
@@ -187,12 +225,54 @@ def evaluate(result, threshold_hours=24, ignored=(), now=None):
         n = alerts["cu_disabled"]
         add("info", f"{n} caso de uso CU- deshabilitado" if n == 1 else f"{n} casos de uso CU- deshabilitados")
 
+    platform = checks.get("platform", {}).get("data") if checks.get("platform", {}).get("ok") else None
+    if platform:
+        for level, text in platform_problems(platform, now):
+            add(level, text)
+
     level = "ok"
     for p in problems:
         if RANK[p["level"]] > RANK[level]:
             level = p["level"]
     problems.sort(key=lambda p: RANK[p["level"]], reverse=True)
     return {"level": level, "problems": problems, "silent": silent}
+
+
+def platform_problems(platform, now=None):
+    """Avisos de la comprobación de plataforma: [(nivel, texto)]. Misma lógica que en web/static/js/views/health.js."""
+    now = now or time.time()
+    problems = []
+    expiry = platform.get("token_expiry")
+    if expiry:
+        days = (expiry - now) / 86400
+        when = time.strftime("%d/%m/%Y", time.localtime(expiry))
+        if days < 0:
+            problems.append(("critical", f"El token de acceso caducó el {when}: hay que renovarlo"))
+        elif days < TOKEN_SERIOUS_DAYS:
+            problems.append(("serious", f"El token de acceso caduca el {when} (en {max(int(days), 0)} días)"))
+        elif days < TOKEN_WARN_DAYS:
+            problems.append(("warning", f"El token de acceso caduca el {when} (en {int(days)} días)"))
+    if platform.get("restart_required"):
+        problems.append(("warning", "El stack tiene un reinicio pendiente"))
+    if platform.get("stack_status") and str(platform["stack_status"]).lower() != "ready":
+        problems.append(("serious", f"ACS indica que el stack está en estado «{platform['stack_status']}»"))
+    if platform.get("pending_addons"):
+        n = platform["pending_addons"]
+        problems.append(("info", f"{n} add-on con actualización pendiente" if n == 1 else f"{n} add-ons con actualización pendiente"))
+    window = platform.get("next_window")
+    if window and window.get("start") and window["start"] - now < WINDOW_NOTICE_DAYS * 86400:
+        when = time.strftime("%d/%m/%Y %H:%M", time.localtime(window["start"]))
+        kind = window.get("type") or "mantenimiento"
+        problems.append(("info", f"Ventana de mantenimiento de Splunk el {when} ({kind}{', sin corte' if window.get('zero_downtime') else ''})"))
+    for freeze in platform.get("active_freezes") or []:
+        problems.append(("info", f"Change freeze vigente hasta el {freeze.get('end')}: {freeze.get('reason') or freeze.get('applies_to') or ''}".rstrip(": ")))
+    for key, error in (platform.get("errors") or {}).items():
+        if key != "addons":
+            problems.append(("info", f"ACS no devolvió {CHECK_ERRORS.get(key, key)}: {str(error)[:120]}"))
+    return problems
+
+
+CHECK_ERRORS = {"stack": "el estado del stack", "windows": "las ventanas de mantenimiento", "freezes": "los change freezes"}
 
 
 class HealthMonitor:

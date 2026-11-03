@@ -12,7 +12,9 @@ from core.clients import ensure_config_exists, get_clients_from_config, manage_c
 from core.connection import select_client, connect_to_splunk
 from core.paths import backup_dir
 from core.splunkbase_account import encrypt_if_plain
+from core import audit
 from options.addons.update_addons import update_addons_cli
+from options.platform.inventory import platform_menu_cli
 from options.alerts.backup_alerts import TECNOLOGIAS, backup_alerts, backup_alerts_especific, backup_alerts_custom, backup_es_use_cases, backup_es_use_cases_custom
 from options.alerts.restore_alerts import restore_alerts
 from options.alerts.list_alerts import list_active_cases
@@ -119,6 +121,7 @@ def interactive():
         print("19) Habilitar / Deshabilitar alertas")
         print("20) Análisis de alertas (ruidosas, muertas, planificador)")
         print("21) Add-ons y apps de Splunkbase: actualizaciones pendientes y actualizar (ACS)")
+        print("22) Plataforma (ACS): estado, mantenimiento, tokens HEC, listas de IP, tokens, índices, exportar apps, reiniciar")
         print("0) Exit")
 
         choice = input("Ingrese una opción: ")
@@ -149,14 +152,17 @@ def interactive():
                 print("Opción no válida, intente nuevamente.")
         elif choice == "2":
             restore_alerts(service)
+            audit.record("restore.alertas", "Restore de alertas desde el menú", current_client["name"])
         elif choice == "3":
             backup_macros(service)
         elif choice == "4":
             restore_macros(service)
+            audit.record("restore.macros", "Restore de macros desde el menú", current_client["name"])
         elif choice == "5":
             backup_users(service)
         elif choice == "6":
             restore_users(service)
+            audit.record("restore.users", "Restore de usuarios desde el menú", current_client["name"])
         elif choice == "7":
             new_client = select_client(clientes)
             new_service = connect_to_splunk(new_client)
@@ -169,6 +175,7 @@ def interactive():
             backup_dashboard(service, dash_name)
         elif choice == "9":
             restore_dashboard(service)
+            audit.record("restore.dashboards", "Restore de un dashboard desde el menú", current_client["name"])
         elif choice == "10":
             list_active_cases(service)
         elif choice == "11":
@@ -187,6 +194,7 @@ def interactive():
             backup_roles(service)
         elif choice == "16":
             restore_roles(service)
+            audit.record("restore.roles", "Restore de roles desde el menú", current_client["name"])
         elif choice == "17":
             manage_clients_cli()
             clientes = get_clients_from_config() or clientes
@@ -195,10 +203,13 @@ def interactive():
             batch_restore_multiple_alerts_same_client(service)
         elif choice == "19":
             toggle_alerts_cli(service)
+            audit.record("alert.toggle", "Habilitar o deshabilitar alertas desde el menú", current_client["name"])
         elif choice == "20":
             alert_analysis_cli(service)
         elif choice == "21":
             update_addons_cli(service, current_client)
+        elif choice == "22":
+            platform_menu_cli(service, current_client)
         elif choice == "0":
             print("Saliendo...")
             break

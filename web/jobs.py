@@ -20,7 +20,10 @@ import traceback
 import uuid
 from contextlib import contextmanager
 
+from core import audit
 from core.paths import BACKUP_ROOT, REPORTS_ROOT
+
+AUDITED_KINDS = ("backup", "restore", "edit", "copy", "addons", "hec", "access", "platform", "export")
 
 MAX_JOBS = 200
 ERROR_PATTERN = re.compile(r"❌|\[ERROR\]|\bError\b|\bERROR\b|No se pudo")
@@ -226,6 +229,8 @@ class JobManager:
         with self._lock:
             self._jobs[job.id] = job
             self._trim()
+        if kind in AUDITED_KINDS:
+            audit.record(f"job.{kind}", title, clients, result="iniciado", job=job.id)
 
         def runner():
             _local.sink = job.write
@@ -244,6 +249,9 @@ class JobManager:
                 _local.sink = None
                 _local.job = None
                 job.finish(status)
+                if kind in AUDITED_KINDS:
+                    audit.record(f"job.{kind}", title, clients, {"errors": job.errors, "warnings": job.warnings, "files": job.files[:20]},
+                                 result=job.status, job=job.id)
 
         threading.Thread(target=runner, name=f"job-{job.id}", daemon=True).start()
         return job

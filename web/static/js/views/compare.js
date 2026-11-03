@@ -7,7 +7,12 @@ import {
 } from '../ui.js';
 
 const PREFS_KEY = 'sm.compare';
-const FOLDERS = { alerts: 'alertas', reports: 'reportes', macros: 'macros', dashboards: 'dashboards', roles: 'roles' };
+const FOLDERS = { alerts: 'alertas', reports: 'reportes', macros: 'macros', dashboards: 'dashboards', roles: 'roles', hec: 'hec', allowlists: 'acceso', outbound: 'acceso' };
+const ACS_HELP = {
+  hec: 'Se comparan la configuración de cada token (índices, source, sourcetype, estado). Al copiar, los que no existen se crean con el mismo valor de token y los que existen se actualizan.',
+  allowlists: 'Se compara la lista de subredes de cada funcionalidad. Al copiar solo se añaden las subredes que faltan en el destino: nunca se quita ninguna.',
+  outbound: 'Se comparan los destinos de cada puerto de salida. Al copiar solo se añaden los destinos que faltan en el destino.',
+};
 const STATUS = {
   same: { label: 'Igual', variant: 'good', icon: 'check', order: 4 },
   different: { label: 'Distinto', variant: 'warn', icon: 'compare', order: 1 },
@@ -53,6 +58,9 @@ function summaryText(type, s) {
     case 'users': return [s.realname, s.roles].filter(Boolean).join(' · ');
     case 'indexes': return `retención ${fmtNum(s.retention_days)} días`;
     case 'apps': return [s.label, s.version && `v${s.version}`].filter(Boolean).join(' · ');
+    case 'hec': return [s.default_index && `índice ${s.default_index}`, s.disabled ? 'deshabilitado' : null, s.warnings?.length ? `${s.warnings.length} avisos` : null].filter(Boolean).join(' · ');
+    case 'allowlists':
+    case 'outbound': return `${fmtNum(s.count)} ${s.count === 1 ? 'subred' : 'subredes'}`;
     default: return '';
   }
 }
@@ -115,6 +123,7 @@ function openCopyModal({ type, typeLabel, source, names, targets, preselected })
     body: [
       h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Clientes de destino'), chips),
       folder === 'alertas' || folder === 'reportes' ? h('div', { class: 'field' }, h('label', {}, 'Compartición tras copiar'), sharing) : null,
+      ACS_HELP[type] ? infoBox(ACS_HELP[type]) : null,
       names.length > 1 ? h('details', { class: 'bulk-details' }, h('summary', {}, `Ver los ${fmtNum(names.length)} elementos`),
         h('ul', { class: 'list-plain bulk-targets' }, names.map((n) => h('li', { class: 'truncate' }, n)))) : null,
       infoBox(['Antes de sobrescribir nada se guarda lo que había en cada destino en ', h('code', {}, `backups/${folder}/`),
@@ -171,6 +180,11 @@ export default {
 
     function renderFields() {
       clear(fieldsSlot);
+      if (types[type]?.acs) {
+        const without = state.clients.filter((c) => !c.platform?.acs).map((c) => c.name);
+        fieldsSlot.append(infoBox([ACS_HELP[type] || 'Se lee vía ACS, solo en clientes de Splunk Cloud con token de sc_admin.',
+          without.length ? ` Sin ACS (darán error): ${without.join(', ')}.` : ''], ''));
+      }
       if (types[type]?.has_main) {
         fieldsSlot.append(h('div', { class: 'field', style: { marginBottom: 0 } }, h('span', { class: 'field-label' }, 'Campos a comparar'),
           h('div', {}, segmented([{ value: 'main', label: 'Principales' }, { value: 'all', label: 'Todos' }], fields, (v) => { fields = v; persist(); })),

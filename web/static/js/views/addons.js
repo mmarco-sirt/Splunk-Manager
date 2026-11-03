@@ -111,6 +111,32 @@ async function updateApps(apps, client) {
   await startJob('/api/addons/update', { client, names: list.map((a) => a.name) });
 }
 
+/** Actualiza todas las pendientes (gestionables por ACS) en varios clientes, con opción de excluir versiones mayores. */
+async function updateMany(rows) {
+  const ready = rows.filter((r) => !r.error && r.acs?.available && manageable(r.pending).length);
+  if (!ready.length) {
+    toast('Ninguno de los clientes seleccionados tiene actualizaciones gestionables por ACS.', 'warn');
+    return;
+  }
+  const majors = ready.reduce((n, r) => n + manageable(r.pending).filter((a) => a.major).length, 0);
+  const excludeMajor = h('input', { type: 'checkbox', checked: majors > 0 });
+  let go = false;
+  const modal = openModal({
+    title: `¿Actualizar add-ons en ${ready.length === 1 ? ready[0].client : `${ready.length} clientes`}?`,
+    size: 'lg',
+    body: [
+      h('ul', { class: 'list-plain', style: { marginBottom: '12px' } }, ready.map((r) => h('li', {}, h('strong', {}, r.client), ': ', manageable(r.pending).map(changeText).join(', ')))),
+      majors ? h('label', { class: 'check', style: { marginBottom: '10px' } }, excludeMajor, `Dejar fuera las ${majors} que cambian de versión mayor (conviene revisar antes sus notas de la versión)`) : null,
+      h('p', { class: 'muted', style: { margin: 0 } }, 'Se actualizan cliente a cliente y app a app a través de ACS, esperando a que termine cada una. En cada cliente se guarda antes la lista de versiones instaladas en backups/addons/.'),
+    ],
+    actions: [{ label: 'Cancelar' }, { label: 'Actualizar', variant: 'primary', icon: 'download', onClick: () => { go = true; } }],
+  });
+  modal.onClose = async () => {
+    if (!go) return;
+    await startJob('/api/addons/update-many', { clients: ready.map((r) => r.client), names: ['todos'], exclude_major: excludeMajor.checked });
+  };
+}
+
 // --- Todos los clientes -----------------------------------------------------------------------------
 
 function overviewCard() {
@@ -126,10 +152,11 @@ function overviewCard() {
     }
     stamp.textContent = `Datos ${fmtRelative(overviewCache.at / 1000)}`;
     const table = new DataTable({
-      rows: overviewCache.rows, rowKey: (r) => r.client, compact: true,
+      rows: overviewCache.rows, rowKey: (r) => r.client, compact: true, selectable: true,
       searchText: (r) => `${r.client} ${r.host} ${r.pending.map((a) => a.name).join(' ')}`,
       searchPlaceholder: 'Buscar cliente o app…',
       initialSort: { key: 'count', dir: 'desc' },
+      selectionActions: [{ label: 'Actualizar pendientes en los seleccionados', icon: 'download', variant: 'primary', onClick: (sel) => updateMany(sel) }],
       filters: [{
         id: 'state',
         options: [
@@ -281,8 +308,8 @@ export default {
     load();
     // Al terminar una actualización de este cliente se vuelve a comprobar qué queda pendiente
     return on('job-finished', (job) => {
-      if (job.kind === 'addons' && job.clients.includes(client)) {
-        load();
+      if (job.kind === 'addons') {
+        if (job.clients.includes(client)) load();
         overviewCache = null;
       }
     });

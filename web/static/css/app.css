@@ -538,6 +538,8 @@ a.tile:hover { border-color: var(--border-strong); }
 .badge-serious { background: var(--serious-soft); color: var(--serious-text); }
 .badge-outline { background: none; border: 1px solid var(--border-strong); }
 .badges { display: flex; flex-wrap: wrap; gap: 4px; }
+code.subnet { font-size: 12px; padding: 1px 6px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--border); }
+code.subnet.shared { border-color: var(--accent); background: var(--accent-soft); }
 .name-badge { margin-left: 6px; vertical-align: 1px; }
 
 /* Dependencias de una búsqueda (macros anidadas sangradas) y vista previa de lookups */

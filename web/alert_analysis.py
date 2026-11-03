@@ -15,6 +15,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
+from core import acs
 from core.knowledge import all_saved_searches
 from options.alerts.backup_alerts import _is_alert, _is_es_use_case
 from web.explorer import _flag, oneshot_results, saved_search_row
@@ -280,10 +281,41 @@ def _int(value):
         return 0
 
 
-def analyze_alerts(service, days=7, noisy_per_day=NOISY_PER_DAY):
+def maintenance_windows(client, day_keys):
+    """
+    Ventanas de mantenimiento de Splunk Cloud (vía ACS) que caen en los días analizados: [{start, end, type, status,
+    days: [AAAA-MM-DD]}]. Devuelve [] si el cliente no tiene ACS; los errores de ACS se devuelven en el campo 'error'.
+    """
+    if not client or acs.unavailable_reason(client):
+        return [], None
+    try:
+        schedules = acs.maintenance_schedules(client, from_time=day_keys[0], to_time=day_keys[-1])
+    except acs.AcsError as e:
+        return [], str(e)
+    windows = []
+    for s in schedules:
+        if not s.get("start"):
+            continue
+        covered = [d for d in day_keys if _same_day(d, s["start"]) or _same_day(d, s.get("end") or s["start"])]
+        if covered:
+            windows.append({"start": s["start"], "end": s.get("end"), "type": s["type"], "status": s["status"], "days": covered,
+                            "zero_downtime": s["zero_downtime"]})
+    return windows, None
+
+
+def _same_day(day_key, epoch):
+    try:
+        return date.fromtimestamp(epoch).isoformat() == day_key
+    except (TypeError, ValueError, OverflowError, OSError):
+        return False
+
+
+def analyze_alerts(service, days=7, noisy_per_day=NOISY_PER_DAY, client=None):
     """
     Análisis de las alertas del cliente en los últimos 'days' días (hoy incluido). Devuelve los días, los totales diarios,
     un resumen y, por alerta, la fila del listado con 'stats' (ejecuciones, disparos, tendencia, ruidosa, muerta...).
+    Con 'client' (dict de config.py de un stack de Splunk Cloud) se consultan además las ventanas de mantenimiento de
+    Splunk del periodo y se anota cuántos saltos de cada alerta cayeron en esos días.
     """
     if days not in ANALYSIS_DAYS:
         raise AnalysisError(f"Periodo no válido: {days} días.")
@@ -292,10 +324,13 @@ def analyze_alerts(service, days=7, noisy_per_day=NOISY_PER_DAY):
     day_keys = [d.isoformat() for d in day_list]
     position = {day: i for i, day in enumerate(day_keys)}
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         inventory_job = pool.submit(_inventory, service)
         scheduler_job = pool.submit(oneshot_results, service, SCHEDULER_SPL.format(offset=days - 1))
+        windows_job = pool.submit(maintenance_windows, client, day_keys)
         inventory, scheduler = inventory_job.result(), scheduler_job.result()
+        windows, windows_error = windows_job.result()
+    maintenance_days = {d for w in windows for d in w["days"]}
     if not scheduler and any(r["is_alert_or_es"] and _state(r) == "active" for r in inventory):
         # Sin una sola ejecución registrada todas parecerían muertas: casi siempre es falta de permisos sobre _internal
         raise AnalysisError(f"El log del planificador (index=_internal sourcetype=scheduler) no devuelve datos de los últimos "
@@ -359,6 +394,7 @@ def analyze_alerts(service, days=7, noisy_per_day=NOISY_PER_DAY):
         for key in totals:
             for i, value in enumerate(raw[key]):
                 totals[key][i] += value
+        stats["skipped_in_maintenance"] = sum(v for d, v in zip(day_keys, raw["skipped"]) if d in maintenance_days)
         alerts.append({**row, "stats": stats})
 
     alerts.sort(key=lambda a: a["name"].lower())
@@ -382,6 +418,7 @@ def analyze_alerts(service, days=7, noisy_per_day=NOISY_PER_DAY):
             "scheduler": sum(1 for a in alerts if a["stats"]["issues"] or a["stats"]["dead"] in SCHEDULER_DEAD),
         },
         "alerts": alerts,
+        "maintenance": {"windows": windows, "days": sorted(maintenance_days), "error": windows_error},
     }
 
 

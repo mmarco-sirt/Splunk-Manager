@@ -17,6 +17,7 @@ from pathlib import Path
 from jinja2 import ChainableUndefined, Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
 
+from core import acs
 from core.paths import REPORTS_ROOT, reports_dir
 from web import services
 from web.alert_analysis import NOISY_PER_DAY, analyze_alerts, period_for, report_lists
@@ -33,6 +34,7 @@ SECTIONS = {
     "alert_analysis": "Análisis de alertas: ruidosas, muertas y problemas del planificador",
     "indexes": "Índices",
     "users": "Usuarios y roles",
+    "platform": "Plataforma: tipo, token y caducidad, reinicio pendiente, add-ons pendientes, tokens HEC, listas de IP, puertos de salida y mantenimiento",
 }
 REPORT_WORKERS = 4
 PDF_TIMEOUT = 120
@@ -145,6 +147,7 @@ def collect_client(name, sections, days, threshold, ignored):
     data["info"] = data["info"] or services.server_info(name)
 
     collectors = {
+        "platform": lambda: _platform(name, client, service),
         "ingest": lambda: ingest_usage(service, days),
         "alerts": lambda: sorted((r for r in list_saved_searches(service) if r["is_alert"] or r["is_es"]),
                                  key=lambda r: r["name"].lower()),
@@ -158,6 +161,58 @@ def collect_client(name, sections, days, threshold, ignored):
                 data[key] = collect()
             except Exception as e:
                 data["errors"][key] = f"{type(e).__name__}: {e}"
+    return data
+
+
+def _platform(name, client, service):
+    """Datos de plataforma del cliente para el informe; lo que ACS no devuelva va en 'errors' de la propia sección."""
+    from web.hec import annotate, index_names
+    from web.access import inventory
+    from web.platform import client_token, token_level
+    info = services.platform_of(client, services.server_info(name))
+    data = {"info": info, "token": client_token(client), "stack": None, "pending_addons": [], "hec": [], "allowlists": [],
+            "outbound": [], "tokens": [], "next_window": None, "freezes": [], "errors": {}}
+    try:
+        data["pending_addons"] = acs.pending_updates(service)
+    except Exception as e:
+        data["errors"]["addons"] = str(e)
+    if not info["acs"]:
+        return data
+    steps = {
+        "stack": lambda: services.stack_status(name, force=True),
+        "hec": lambda: acs.list_hec(client),
+        "access": lambda: inventory(name),
+        "tokens": lambda: acs.list_tokens(client),
+        "windows": lambda: acs.maintenance_schedules(client),
+        "freezes": lambda: acs.maintenance_preferences(client)["freezes"],
+    }
+    for key, step in steps.items():
+        try:
+            value = step()
+        except Exception as e:
+            data["errors"][key] = str(e)
+            continue
+        if key == "hec":
+            try:
+                annotate(value, index_names(service))
+            except Exception:
+                pass
+            data["hec"] = [{k: v for k, v in r.items() if k != "token"} for r in value]
+        elif key == "access":
+            data["allowlists"] = [a for a in value["allowlists"] if not a["error"]]
+            data["outbound"] = value["outbound"]
+        elif key == "tokens":
+            for t in value:
+                t["level"] = token_level(t["expires_on"])
+            data["tokens"] = value
+        elif key == "windows":
+            data["next_window"] = acs.next_window(value)
+            data["windows"] = value
+        elif key == "freezes":
+            data["freezes"] = value
+            data["active_freezes"] = acs.active_freezes(value)
+        else:
+            data[key] = value
     return data
 
 
@@ -315,6 +370,56 @@ def write_excel(path, report):
                             [[c["name"], r["name"], r["datatype"], r["events"], r["size_mb"], r["max_size_mb"] or None,
                               r["retention_days"], r["archive_days"] or None, "Sí" if r["disabled"] else "No", fmt_time(r["max_time"])]
                              for c in clients for r in c.get("indexes") or []]))
+
+    if "platform" in sections:
+        with_platform = [c for c in clients if c.get("platform")]
+        level_text = {"expired": "Caducado", "serious": "Caduca en menos de 7 días", "warning": "Caduca en menos de 30 días", "ok": "Correcto"}
+        sheets.append(Sheet("Plataforma",
+                            [("Cliente", "text"), ("Tipo", "text"), ("Experiencia", "text"), ("Versión del stack", "text"),
+                             ("Estado del stack", "text"), ("Reinicio pendiente", "text"), ("ACS", "text"), ("Token caduca", "text"),
+                             ("Token", "text"), ("Tokens en el stack", "int"), ("Add-ons pendientes", "int"), ("Tokens HEC", "int"),
+                             ("Listas de IP (subredes)", "int"), ("Puertos de salida", "int"), ("Próxima ventana", "text"),
+                             ("Change freeze", "text"), ("Avisos", "wrap")],
+                            [[c["name"], {"cloud": "Splunk Cloud", "enterprise": "Enterprise"}.get(p["info"]["kind"], "Desconocido"),
+                              (p["stack"] or {}).get("experience") or "", (p["stack"] or {}).get("version") or "",
+                              (p["stack"] or {}).get("status") or "", "Sí" if (p["stack"] or {}).get("restart_required") else ("No" if p["stack"] else ""),
+                              "Disponible" if p["info"]["acs"] else (p["info"]["reason"] or "No"),
+                              fmt_time(p["token"]["expiry"]) if p["token"]["expiry"] else ("Sin caducidad" if p["token"]["present"] else "Sin token"),
+                              level_text.get(p["token"]["level"], ""), len(p["tokens"]) if p["info"]["acs"] else None,
+                              len(p["pending_addons"]), len(p["hec"]) if p["info"]["acs"] else None,
+                              sum(len(a["subnets"]) for a in p["allowlists"]) if p["info"]["acs"] else None,
+                              len(p["outbound"]) if p["info"]["acs"] else None,
+                              fmt_time(p["next_window"]["start"]) + f" ({p['next_window']['type']})" if p.get("next_window") else "",
+                              "; ".join(f"hasta {f['end']}: {f['reason']}" for f in p.get("active_freezes") or []),
+                              "\n".join(f"{k}: {v}" for k, v in p["errors"].items())]
+                             for c in with_platform for p in [c["platform"]]]))
+        sheets.append(Sheet("Tokens HEC",
+                            [("Cliente", "text"), ("Token", "text"), ("Índice por defecto", "text"), ("Índices permitidos", "wrap"),
+                             ("Source", "text"), ("Sourcetype", "text"), ("Deshabilitado", "text"), ("Ack", "text"), ("Avisos", "wrap")],
+                            [[c["name"], t["name"], t["default_index"], ", ".join(t["allowed_indexes"]), t["default_source"],
+                              t["default_sourcetype"], "Sí" if t["disabled"] else "No", "Sí" if t["use_ack"] else "No",
+                              "\n".join(t.get("warnings") or [])]
+                             for c in with_platform for t in c["platform"]["hec"]]))
+        sheets.append(Sheet("Listas de IP",
+                            [("Cliente", "text"), ("Funcionalidad", "text"), ("IP", "text"), ("Subredes", "int"), ("Lista", "wrap")],
+                            [[c["name"], a["label"], f"IPv{a['version']}", len(a["subnets"]), "\n".join(a["subnets"])]
+                             for c in with_platform for a in c["platform"]["allowlists"]]))
+        sheets.append(Sheet("Puertos de salida",
+                            [("Cliente", "text"), ("Puerto", "int"), ("IP", "text"), ("Destinos", "wrap")],
+                            [[c["name"], p["port"], f"IPv{p['version']}", "\n".join(p["subnets"])]
+                             for c in with_platform for p in c["platform"]["outbound"]]))
+        sheets.append(Sheet("Add-ons pendientes",
+                            [("Cliente", "text"), ("App", "text"), ("Nombre", "text"), ("Instalada", "text"), ("Nueva", "text"),
+                             ("Versión mayor", "text"), ("Deshabilitada", "text")],
+                            [[c["name"], a["name"], a["label"], a["version"], a["new_version"], "Sí" if a["major"] else "No",
+                              "Sí" if a["disabled"] else "No"]
+                             for c in with_platform for a in c["platform"]["pending_addons"]]))
+        sheets.append(Sheet("Tokens de acceso",
+                            [("Cliente", "text"), ("Usuario", "text"), ("Audiencia", "text"), ("Estado", "text"), ("Caduca", "text"),
+                             ("Último uso", "text"), ("Desde IP", "text"), ("Aviso", "text")],
+                            [[c["name"], t["user"], t["audience"], t["status"], fmt_time(t["expires_on"]), fmt_time(t["last_used"]),
+                              t["last_used_ip"], level_text.get(t.get("level"), "")]
+                             for c in with_platform for t in c["platform"]["tokens"]]))
 
     if "users" in sections:
         sheets.append(Sheet("Usuarios",

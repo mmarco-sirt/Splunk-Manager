@@ -2,6 +2,7 @@
 import { get, post } from '../api.js';
 import { state, selectClient, navigate } from '../core.js';
 import { openReportModal } from './reports.js';
+import { platformBadges } from './platform.js';
 import {
   h, append, clear, icon, button, badge, pageHeader, DataTable, openDrawer, kv, section, errorBox, infoBox, emptyState,
   statusLabel, fmtNum, fmtBytes, fmtRelative, fmtDate, withBusy,
@@ -19,7 +20,31 @@ const LEVEL_UI = {
   critical: { text: 'Crítico', variant: 'bad', icon: 'xCircle' },
   pending: { text: 'Sin analizar', variant: 'muted', icon: 'clock' },
 };
-const CHECK_LABELS = { alerts: 'las alertas', scheduler: 'el planificador', ingest: 'la ingesta', sources: 'las fuentes de datos' };
+const CHECK_LABELS = { alerts: 'las alertas', scheduler: 'el planificador', ingest: 'la ingesta', sources: 'las fuentes de datos', platform: 'la plataforma (ACS)' };
+const CHECK_ERRORS = { stack: 'el estado del stack', windows: 'las ventanas de mantenimiento', freezes: 'los change freezes' };
+const WINDOW_NOTICE_DAYS = 7;
+
+/** Avisos de la comprobación de plataforma: misma lógica que platform_problems() de web/health.py. */
+export function platformProblems(p, now = Date.now() / 1000) {
+  const problems = [];
+  const add = (level, text) => problems.push({ level, text });
+  const t = state.meta?.token_warn_days || { warning: 30, serious: 7 };
+  if (p.token_expiry) {
+    const days = (p.token_expiry - now) / 86400;
+    const when = fmtDate(p.token_expiry);
+    if (days < 0) add('critical', `El token de acceso caducó el ${when}: hay que renovarlo`);
+    else if (days < t.serious) add('serious', `El token de acceso caduca el ${when} (en ${Math.max(Math.floor(days), 0)} días)`);
+    else if (days < t.warning) add('warning', `El token de acceso caduca el ${when} (en ${Math.floor(days)} días)`);
+  }
+  if (p.restart_required) add('warning', 'El stack tiene un reinicio pendiente');
+  if (p.stack_status && String(p.stack_status).toLowerCase() !== 'ready') add('serious', `ACS indica que el stack está en estado «${p.stack_status}»`);
+  if (p.pending_addons) add('info', p.pending_addons === 1 ? '1 add-on con actualización pendiente' : `${p.pending_addons} add-ons con actualización pendiente`);
+  const w = p.next_window;
+  if (w?.start && w.start - now < WINDOW_NOTICE_DAYS * 86400) add('info', `Ventana de mantenimiento de Splunk el ${fmtDate(w.start)} (${w.type || 'mantenimiento'}${w.zero_downtime ? ', sin corte' : ''})`);
+  for (const f of p.active_freezes || []) add('info', `Change freeze vigente hasta el ${f.end}${f.reason || f.applies_to ? `: ${f.reason || f.applies_to}` : ''}`);
+  for (const [key, err] of Object.entries(p.errors || {})) if (key !== 'addons') add('info', `ACS no devolvió ${CHECK_ERRORS[key] || key}: ${String(err).slice(0, 120)}`);
+  return problems;
+}
 
 const pct = (n) => `${Math.round(n * 100)} %`;
 
@@ -75,6 +100,9 @@ export function evaluate(result, thresholdHours, ignored) {
 
   const alerts = checks.alerts?.ok ? checks.alerts.data : null;
   if (alerts?.cu_disabled) add('info', alerts.cu_disabled === 1 ? '1 caso de uso CU- deshabilitado' : `${alerts.cu_disabled} casos de uso CU- deshabilitados`);
+
+  const platform = checks.platform?.ok ? checks.platform.data : null;
+  if (platform) for (const p of platformProblems(platform)) add(p.level, p.text);
 
   const level = problems.reduce((current, p) => (RANK[p.level] > RANK[current] ? p.level : current), 'ok');
   problems.sort((a, b) => RANK[b.level] - RANK[a.level]);
@@ -160,6 +188,17 @@ export default {
             : h('span', { class: 'muted' }, r.level === 'pending' ? '—' : 'Sin incidencias')),
         },
         { key: 'version', label: 'Versión', sort: (r) => r.result?.info?.version || '', render: (r) => r.result?.info?.version || h('span', { class: 'muted' }, '—') },
+        {
+          key: 'platform', label: 'Plataforma', sort: (r) => (r.result?.checks?.platform?.data?.token_expiry || 9e12),
+          render: (r) => {
+            const p = r.result?.checks?.platform?.data;
+            if (!p) return h('span', { class: 'muted' }, '—');
+            const t = state.meta?.token_warn_days || { warning: 30, serious: 7 };
+            const days = p.token_expiry ? (p.token_expiry - Date.now() / 1000) / 86400 : null;
+            const token = days === null ? null : days < 0 ? badge('Token caducado', 'bad', 'alert') : days < t.serious ? badge(`Token: ${Math.max(Math.floor(days), 0)} d`, 'serious', 'alert') : days < t.warning ? badge(`Token: ${Math.floor(days)} d`, 'warn', 'key') : null;
+            return h('div', {}, platformBadges(p), token ? h('div', { class: 'badges', style: { marginTop: '3px' } }, token, p.pending_addons ? badge(`${fmtNum(p.pending_addons)} add-ons`, 'outline') : null) : (p.pending_addons ? h('div', { class: 'cell-sub' }, `${fmtNum(p.pending_addons)} add-ons pendientes`) : null));
+          },
+        },
         {
           key: 'alerts', label: 'Alertas', className: 'num', sort: (r) => r.result?.checks?.alerts?.data?.total ?? -1,
           render: (r) => {
@@ -307,6 +346,17 @@ export default {
           ],
         }).el : null));
       }
+      const p = checks.platform?.data;
+      if (p) {
+        body.push(section('Plataforma', kv([
+          ['Tipo', platformBadges(p)],
+          ['Stack', p.stack_version ? `${p.experience || '?'} · versión ${p.stack_version} · estado ${p.stack_status || '?'}` : (p.acs ? null : p.reason)],
+          ['Token de acceso', p.token_expiry ? `caduca el ${fmtDate(p.token_expiry)}` : (p.acs ? 'sin caducidad' : null)],
+          ['Add-ons pendientes', p.pending_addons === null ? null : fmtNum(p.pending_addons)],
+          ['Próxima ventana', p.next_window ? `${fmtDate(p.next_window.start)} · ${p.next_window.type}${p.next_window.zero_downtime ? ' (sin corte)' : ''}` : (p.acs ? 'ninguna en 30 días' : null)],
+          ['Change freeze', p.active_freezes?.length ? p.active_freezes.map((f) => `hasta ${f.end}: ${f.reason || f.applies_to}`).join(' · ') : (p.acs ? 'ninguno' : null)],
+        ]), Object.keys(p.errors || {}).length ? h('p', { class: 'muted', style: { fontSize: '12.5px' } }, Object.entries(p.errors).map(([k, v]) => `${k}: ${v}`).join(' · ')) : null));
+      }
       const i = checks.ingest?.data;
       if (i) {
         body.push(section('Ingesta (license_usage.log)', kv([
@@ -367,7 +417,7 @@ export default {
     append(clear(root), [
       pageHeader({
         title: 'Salud de clientes',
-        subtitle: 'Estado de todos los clientes de un vistazo: conexión, alertas, planificador e ingesta de las últimas 24 h, y fuentes que han dejado de enviar datos.',
+        subtitle: 'Estado de todos los clientes de un vistazo: conexión, alertas, planificador e ingesta de las últimas 24 h, fuentes que han dejado de enviar datos y, vía ACS, token, reinicio pendiente, add-ons y mantenimiento.',
         actions: [stamp, thresholdSelect,
           button('Exportar informe…', { iconName: 'fileText', onClick: () => openReportModal({ clients: state.clients.map((c) => c.name), sections: ['health'] }) }),
           runAll],

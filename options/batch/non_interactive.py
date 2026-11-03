@@ -1,6 +1,7 @@
 """
 Modo no interactivo del CLI, pensado para el Programador de tareas de Windows: backups, informes, habilitar o
-deshabilitar alertas y actualizar add-ons de Splunkbase en uno o varios clientes sin preguntar nada. Todo lo que se
+deshabilitar alertas, actualizar add-ons de Splunkbase, inventarios de la plataforma (estado, HEC, listas de IP,
+tokens, índices), exportación de apps y reinicio vía ACS, en uno o varios clientes sin preguntar nada. Todo lo que se
 muestra se guarda también en logs/AAAAMMDD-HHMMSS_<acción>.log (se conservan los MAX_LOGS más recientes).
 
 Código de salida: 0 = todo correcto, 1 = alguna operación falló (ver el log), 2 = argumentos o configuración no válidos.
@@ -11,12 +12,14 @@ import sys
 import time
 import traceback
 
+from core import audit
 from core.clients import ensure_config_exists, get_clients_from_config, migrate_config
 from core.paths import LOGS_ROOT, logs_dir
 from core.splunkbase_account import ENV_PASSWORD, ENV_USERNAME, encrypt_if_plain, get_account
 from options.addons.update_addons import list_pending, parse_names, update_addons
 from options.alerts.backup_alerts import backup_alerts, backup_es_use_cases
 from options.alerts.toggle_alerts import parse_patterns, set_alerts_enabled
+from options.platform import inventory as platform_cli
 from options.macros.backup_macros import backup_macros
 from options.reports.backup_reports import backup_reports
 from options.roles.backup_roles import backup_roles
@@ -37,7 +40,14 @@ BACKUP_KINDS = {
     "roles": ("roles", backup_roles),
 }
 REPORT_SECTIONS = {"salud": "health", "ingesta": "ingest", "alertas": "alerts", "analisis": "alert_analysis",
-                   "indices": "indexes", "usuarios": "users"}
+                   "indices": "indexes", "usuarios": "users", "plataforma": "platform"}
+INVENTORIES = {   # --<flag>: (título, función(service, client))
+    "estado": ("Estado del stack, mantenimiento y token", platform_cli.show_status),
+    "hec": ("Tokens HEC", platform_cli.inventory_hec),
+    "acceso": ("Listas de IP permitidas y puertos de salida", platform_cli.inventory_access),
+    "tokens": ("Tokens de autenticación", platform_cli.inventory_tokens),
+    "indices": ("Índices", platform_cli.inventory_indexes),
+}
 ALL_CLIENTS = ("todos", "all", "*")
 
 EXAMPLES = """
@@ -49,6 +59,10 @@ Ejemplos:
   main_cli.py --deshabilitar "CU-AD-001,CU-FW-*" --clientes todos --simular
   main_cli.py --addons --clientes todos
   main_cli.py --actualizar-addons "Splunk_TA_windows,Splunk_SA_CIM" --clientes CLIENTE1 --simular
+  main_cli.py --actualizar-addons todos --sin-mayores --clientes todos
+  main_cli.py --estado --hec --acceso --tokens --indices --clientes todos
+  main_cli.py --exportar-apps "sirt_soc_app_for_splunk" --clientes todos
+  main_cli.py --reiniciar --clientes CLIENTE1 --simular
 
 Sin argumentos se abre el menú interactivo. Código de salida: 0 correcto, 1 algo falló (ver logs/), 2 argumentos no válidos.
 """
@@ -78,6 +92,16 @@ def build_parser():
     actions.add_argument("--actualizar-addons", metavar="NOMBRES",
                          help="actualiza apps/add-ons de Splunkbase vía ACS: 'todos' o nombres separados por comas "
                               "(admite comodines)")
+    actions.add_argument("--estado", action="store_true",
+                         help="estado del stack (ACS): experiencia, versión, reinicio pendiente, mantenimiento y caducidad del token")
+    actions.add_argument("--hec", action="store_true", help="inventario de tokens HEC (ACS) con backup en backups/hec/")
+    actions.add_argument("--acceso", action="store_true",
+                         help="inventario de listas de IP permitidas y puertos de salida (ACS) con backup en backups/acceso/")
+    actions.add_argument("--tokens", action="store_true", help="tokens de autenticación del stack (ACS) con backup en backups/tokens/")
+    actions.add_argument("--indices", action="store_true", help="inventario de índices con backup en backups/indices/")
+    actions.add_argument("--exportar-apps", metavar="NOMBRES",
+                         help="exporta apps como .tgz vía ACS a backups/apps/: 'todos' o nombres separados por comas")
+    actions.add_argument("--reiniciar", action="store_true", help="reinicia el stack vía ACS (rolling restart en clusters)")
     actions.add_argument("--listar-clientes", action="store_true", help="muestra los clientes configurados y termina")
     options = parser.add_argument_group("Clientes")
     options.add_argument("-c", "--clientes", metavar="CLIENTES", help="'todos' o nombres separados por comas")
@@ -92,7 +116,12 @@ def build_parser():
     report.add_argument("--por-cliente", action="store_true", help="un informe por cliente en lugar de uno conjunto")
     other = parser.add_argument_group("Otros")
     other.add_argument("--simular", action="store_true",
-                       help="con --habilitar/--deshabilitar/--actualizar-addons: muestra qué cambiaría sin tocar nada")
+                       help="con --habilitar/--deshabilitar/--actualizar-addons/--exportar-apps/--reiniciar: muestra qué "
+                            "cambiaría o la petición que se enviaría a ACS sin tocar nada")
+    other.add_argument("--sin-mayores", action="store_true",
+                       help="con --actualizar-addons: no actualiza las apps que cambian de versión mayor")
+    other.add_argument("--sin-local", action="store_true", help="con --exportar-apps: no incluir la carpeta local/ de la app")
+    other.add_argument("--sin-usuarios", action="store_true", help="con --exportar-apps: no incluir las carpetas de usuarios")
     other.add_argument("--splunkbase-usuario", metavar="USUARIO",
                        help=f"cuenta de Splunkbase para --actualizar-addons (contraseña en la variable de entorno "
                             f"{ENV_PASSWORD}); si no se indica, se usa la guardada en config.py")
@@ -260,7 +289,13 @@ def run_backups(names, kinds):
 def run_toggle(names, patterns, enabled, dry_run):
     verb = "Habilitar" if enabled else "Deshabilitar"
     print(f"\n=== {verb} {', '.join(patterns)}{' (simulación)' if dry_run else ''} ===")
-    run_for_clients(names, lambda service: set_alerts_enabled(service, patterns, enabled, dry_run))()
+
+    def action(service, client):
+        result = set_alerts_enabled(service, patterns, enabled, dry_run)
+        audit.record(f"alert.{'enable' if enabled else 'disable'}", f"{verb} {', '.join(patterns)}", client.get("name"),
+                     {"changed": result["changed"], "failed": result["failed"]}, result="error" if result["failed"] else "ok", dry_run=dry_run)
+
+    run_for_clients(names, action, with_client=True)()
 
 
 def run_report(names, options):
@@ -278,10 +313,46 @@ def run_pending_addons(names):
     run_for_clients(names, lambda service, client: list_pending(service, client), with_client=True)()
 
 
-def run_update_addons(names, patterns, dry_run, account):
-    print(f"\n=== Actualizar add-ons: {', '.join(patterns)}{' (simulación)' if dry_run else ''} ===")
-    run_for_clients(names, lambda service, client: update_addons(service, client, patterns, account=account,
-                                                                 dry_run=dry_run), with_client=True)()
+def run_update_addons(names, patterns, dry_run, account, exclude_major=False):
+    print(f"\n=== Actualizar add-ons: {', '.join(patterns)}{' sin versiones mayores' if exclude_major else ''}"
+          f"{' (simulación)' if dry_run else ''} ===")
+
+    def action(service, client):
+        chosen = patterns
+        if exclude_major:
+            from options.addons.update_addons import pending_with_acs, select_pending
+            pending, _ = pending_with_acs(service, client)
+            wanted, _ = select_pending(pending, patterns)
+            skipped = [a["name"] for a in wanted if a["major"]]
+            chosen = [a["name"] for a in wanted if not a["major"]]
+            if skipped:
+                print(f"· Se dejan fuera por cambiar de versión mayor: {', '.join(skipped)}")
+            if not chosen:
+                print("· No queda nada que actualizar en este cliente.")
+                return
+        result = update_addons(service, client, chosen, account=account, dry_run=dry_run)
+        audit.record("addons.update", f"Actualizar add-ons: {', '.join(chosen)}", client.get("name"),
+                     {"updated": result["updated"], "failed": result["failed"]}, result="error" if result["failed"] else "ok", dry_run=dry_run)
+
+    run_for_clients(names, action, with_client=True)()
+
+
+def run_inventories(names, keys):
+    for key in keys:
+        title, fn = INVENTORIES[key]
+        print(f"\n=== {title} ===")
+        run_for_clients(names, fn, with_client=True)()
+
+
+def run_export_apps(names, apps, options, dry_run):
+    print(f"\n=== Exportar apps: {', '.join(apps)}{' (simulación)' if dry_run else ''} ===")
+    run_for_clients(names, lambda service, client: platform_cli.export_apps(service, client, apps, options, dry_run=dry_run),
+                    with_client=True)()
+
+
+def run_restart(names, dry_run):
+    print(f"\n=== Reiniciar el stack{' (simulación)' if dry_run else ''} ===")
+    run_for_clients(names, lambda service, client: platform_cli.restart(service, client, dry_run=dry_run), with_client=True)()
 
 
 def _list_clients(clients):
@@ -323,11 +394,19 @@ def main(argv):
         addons = parse_names(args.actualizar_addons) if args.actualizar_addons else []
         if args.actualizar_addons and not addons:
             raise UsageError("Indique qué actualizar con --actualizar-addons: todos o nombres separados por comas.")
-        if not (kinds or enable or disable or report or args.addons or addons):
-            raise UsageError("Indique al menos una acción: --backup, --habilitar, --deshabilitar, --informe, --addons "
-                             "o --actualizar-addons (ver --help).")
-        if args.simular and not (enable or disable or addons):
-            raise UsageError("--simular solo se usa con --habilitar, --deshabilitar o --actualizar-addons.")
+        inventories = [k for k in INVENTORIES if getattr(args, k)]
+        export_apps = parse_names(args.exportar_apps) if args.exportar_apps else []
+        if args.exportar_apps and not export_apps:
+            raise UsageError("Indique qué exportar con --exportar-apps: todos o nombres separados por comas.")
+        if not (kinds or enable or disable or report or args.addons or addons or inventories or export_apps or args.reiniciar):
+            raise UsageError("Indique al menos una acción: --backup, --habilitar, --deshabilitar, --informe, --addons, "
+                             "--actualizar-addons, --estado, --hec, --acceso, --tokens, --indices, --exportar-apps o "
+                             "--reiniciar (ver --help).")
+        if args.simular and not (enable or disable or addons or export_apps or args.reiniciar):
+            raise UsageError("--simular solo se usa con --habilitar, --deshabilitar, --actualizar-addons, --exportar-apps o --reiniciar.")
+        if args.sin_mayores and not addons:
+            raise UsageError("--sin-mayores solo se usa con --actualizar-addons.")
+        export_options = {"default": True, "local": not args.sin_local, "users": not args.sin_usuarios, "confs_only": False}
         account = resolve_splunkbase_account(args) if addons and not args.simular else None
         names = resolve_clients(args.clientes, args.excluir, all_clients)
     except UsageError as e:
@@ -335,7 +414,9 @@ def main(argv):
         return EXIT_USAGE
 
     label = "+".join(a for a, on in (("backup", kinds), ("habilitar", enable), ("deshabilitar", disable),
-                                     ("informe", report), ("addons", args.addons), ("actualizar-addons", addons)) if on)
+                                     ("informe", report), ("addons", args.addons), ("actualizar-addons", addons),
+                                     *((k, True) for k in inventories), ("exportar-apps", export_apps),
+                                     ("reiniciar", args.reiniciar)) if on)
     log_path = None if args.sin_log else _new_log_path(label)
     log_file = open(log_path, "w", encoding="utf-8") if log_path else None
     original = sys.stdout, sys.stderr
@@ -357,7 +438,13 @@ def main(argv):
         if args.addons:
             run_pending_addons(names)
         if addons:
-            run_update_addons(names, addons, args.simular, account)
+            run_update_addons(names, addons, args.simular, account, args.sin_mayores)
+        if inventories:
+            run_inventories(names, inventories)
+        if export_apps:
+            run_export_apps(names, export_apps, export_options, args.simular)
+        if args.reiniciar:
+            run_restart(names, args.simular)
     except KeyboardInterrupt:
         print("\n❌ Interrumpido por el usuario.")
     except Exception as e:

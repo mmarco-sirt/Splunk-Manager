@@ -19,6 +19,10 @@ import compare from './views/compare.js';
 import multiEdit from './views/multi-edit.js';
 import appValidation from './views/app-validation.js';
 import addons from './views/addons.js';
+import hec from './views/hec.js';
+import access from './views/access.js';
+import platform from './views/platform.js';
+import audit from './views/audit.js';
 import alertAnalysis from './views/alert-analysis.js';
 import reports from './views/reports.js';
 import activity, { openJobDrawer } from './views/activity.js';
@@ -27,8 +31,8 @@ const NAV = [
   { title: 'General', items: [overview, health, search] },
   { title: 'Objetos', items: [alertsView, alertAnalysis, reportsView, macrosView, lookupsView, dashboardsView] },
   { title: 'Acceso', items: [usersView, rolesView] },
-  { title: 'Plataforma', items: [indexesView, ingest, appsView] },
-  { title: 'Gestión', items: [compare, multiEdit, appValidation, addons, reports, backups, batch, clients, activity] },
+  { title: 'Plataforma', items: [indexesView, ingest, appsView, hec, access, platform] },
+  { title: 'Gestión', items: [compare, multiEdit, appValidation, addons, reports, backups, batch, clients, activity, audit] },
 ];
 const VIEWS = new Map(NAV.flatMap((g) => g.items).map((v) => [v.id, v]));
 

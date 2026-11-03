@@ -3,9 +3,11 @@
 Herramienta para administrar varias plataformas Splunk: backup y restore de alertas, macros, usuarios, roles,
 dashboards y reportes (también en modo batch sobre varios clientes), edición de alertas (también en varios clientes a
 la vez), dependencias de cada alerta (macros y lookups), inventario de lookups, análisis de alertas ruidosas y muertas,
-comparación de clientes, validación de versiones de la app de SIRT antes de desplegarlas, informes en Excel/HTML/PDF y
-actualización de apps y add-ons de Splunkbase vía ACS. El CLI se puede programar con el Programador de tareas de Windows
-para hacer backups e informes automáticos.
+comparación de clientes, validación de versiones de la app de SIRT antes de desplegarlas, informes en Excel/HTML/PDF y,
+a través del Admin Config Service (ACS) de Splunk Cloud, actualización de add-ons, tokens HEC, listas de IP permitidas
+y puertos de salida, tokens de autenticación, estado del stack y ventanas de mantenimiento, reinicio y exportación de
+apps. Todos los cambios quedan en un registro de auditoría. El CLI se puede programar con el Programador de tareas de
+Windows para hacer backups, inventarios e informes automáticos.
 
 ## Estructura
 
@@ -23,11 +25,14 @@ core/
   spl.py                 Análisis estático de SPL: macros, lookups, comandos que escriben datos y expansión de macros
   dependencies.py        Dependencias de una búsqueda (macros anidadas y lookups) y si se ven desde su app
   splunk_conf.py         Lectura de .conf/.meta como Splunk (stanzas, continuaciones, duplicados) y de su codificación
-  acs.py                 Admin Config Service (ACS) de Splunk Cloud y API de Splunkbase: apps instaladas y su actualización
+  acs.py                 Admin Config Service (ACS) de Splunk Cloud: apps y su actualización, estado y reinicio, ventanas de
+                         mantenimiento, tokens HEC, listas de IP y puertos de salida, tokens JWT y exportación de apps
+  audit.py               Registro de auditoría (logs/auditoria.jsonl): qué se cambió, dónde, cuándo, desde dónde y resultado
   splunkbase_account.py  Cuenta de Splunkbase guardada en config.py (contraseña cifrada)
 options/
   alerts/                Backup / restore / listado / habilitar y deshabilitar alertas (incl. Enterprise Security)
   addons/                Apps y add-ons de Splunkbase con actualización pendiente y su actualización vía ACS
+  platform/              Plataforma (ACS) desde la consola: estado, inventarios (HEC, acceso, tokens, índices), export, reinicio
   macros/  users/  roles/  dashboards/  reports/
   batch/                 Operaciones sobre varios clientes o varios archivos, y modo no interactivo del CLI
 web/
@@ -40,7 +45,10 @@ web/
   app_diff.py            Validar app: cambios entre versiones o frente a un cliente
   app_validation.py      Validar app: comprobaciones del paquete y contra un cliente, y ejecución de búsquedas
   app_report.py          Validar app: informe en Excel, HTML y PDF
-  addons.py              Add-ons: pendientes por cliente y de todos, actualización vía ACS como tarea y cuenta de Splunkbase
+  addons.py              Add-ons: pendientes por cliente y de todos, actualización vía ACS (también en varios clientes) y cuenta
+  hec.py                 Tokens HEC vía ACS: inventario con avisos, alta/edición/borrado, backup y restore
+  access.py              Listas de IP permitidas y puertos de salida vía ACS: inventario, cambios en varios clientes, backup
+  platform.py            Estado del stack y reinicio, mantenimiento, tokens de autenticación y exportación de apps (.tgz)
   alert_editor.py        Edición de alertas y reportes (también en bloque)
   multi_edit.py          Edición de alertas en varios clientes a la vez (vista previa y backup)
   alert_analysis.py      Análisis de alertas: ruidosas, muertas, planificador y tendencia
@@ -76,6 +84,10 @@ Secciones:
 - **Resumen**: versión y datos del servidor, recuento de objetos, alertas más disparadas e índices por tamaño.
 - **Salud de clientes**: todos los clientes de un vistazo (conexión, alertas, planificador y ingesta de las
   últimas 24 h, y fuentes que han dejado de enviar datos), con el umbral configurable y fuentes que se pueden ignorar.
+  La comprobación «plataforma» añade, por cliente, el tipo (Cloud Victoria/Classic o Enterprise), la **caducidad del
+  token** (aviso a 30 días, problema a 7 y crítico si ha caducado), si el stack tiene un **reinicio pendiente**, los
+  **add-ons con actualización pendiente**, la **próxima ventana de mantenimiento** de Splunk (si es en menos de 7 días) y
+  los **change freezes** vigentes.
 - **Búsqueda**: búsquedas SPL con rango de tiempo, progreso, cancelación y exportación a CSV/JSON, en el cliente
   activo o en **varios clientes a la vez** (resultados unidos con una columna `cliente`, p. ej. para buscar un IOC).
 - **Alertas / Reportes**: listado en vivo de todas las apps y usuarios (también las privadas y las compartidas solo en
@@ -103,6 +115,10 @@ Secciones:
   - **Planificador**: se saltan a menudo (con el motivo), tienen errores o se ejecutan menos de lo que indica su cron.
   - **Tendencia**: disparos por día de cada alerta y comparación de la segunda mitad del periodo con la primera.
 
+  En Splunk Cloud con ACS se consultan las **ventanas de mantenimiento** de Splunk del periodo: se avisa de ellas y, en
+  la pestaña Planificador, de cuántos saltos de cada alerta cayeron en esos días (lo normal es que se deban al
+  mantenimiento y no a un problema de la alerta).
+
   Desde cada lista se pueden deshabilitar, modificar en bloque o editar en varios clientes las seleccionadas.
 - **Edición en varios clientes**: una o varias alertas (p. ej. `CU-AD-001`) en todos los clientes que la tienen.
   Se busca en qué clientes existe, se elige qué cambiar (el mismo valor en todos, p. ej. el cron, o **buscar y
@@ -125,7 +141,27 @@ Secciones:
   `| inputlookup` en la app del lookup (solo lectura).
 - **Dashboards, Usuarios, Roles**: listado, detalle, backup y restore.
 - **Índices / Apps**: eventos, tamaño, retención y archivado (en Splunk Cloud, datos reales de los indexers),
-  versiones y estado.
+  versiones y estado. En Apps, **Exportar apps…** descarga vía ACS la app completa como `.tgz` (`default/`, `local/` y
+  `users/`, o solo los `.conf`) a `backups/apps/<stack>/` (se conservan las 10 últimas de cada app), con opción de
+  guardarla también en «Validar app» para comparar versiones. Requiere la capacidad `export_apps`; las apps premium (ES,
+  ITSI) y las de Splunk no se pueden exportar.
+- **Tokens HEC** (ACS): tokens del HTTP Event Collector del cliente con índice por defecto, índices permitidos, source,
+  sourcetype y estado, y avisos cuando el índice por defecto no existe o está deshabilitado, hay índices permitidos que
+  no existen o el índice por defecto no está entre ellos. Alta, edición (PATCH, solo lo que cambia), habilitar o
+  deshabilitar, borrado (guardando antes su configuración), valor del token bajo demanda (queda en la auditoría),
+  **backup y restore** (`backups/hec/`, incluido el valor del token para recrearlo igual) y tarjeta «Todos los clientes».
+  Cada cambio se puede **simular**: muestra la petición que se enviaría a ACS.
+- **Acceso de red** (ACS): listas de IP permitidas por funcionalidad (API de búsqueda, Splunk Web, HEC, forwarders S2S,
+  IDM, ACS; IPv4 e IPv6) y puertos de salida con sus destinos. Añadir o quitar subredes en **uno o varios clientes a la
+  vez** como tarea (con simulación; antes de quitar se guarda el estado en `backups/acceso/`), backup y matriz de
+  «Todos los clientes» que resalta las subredes repetidas en varios clientes (las de SIRT) frente a las de un solo cliente.
+- **Plataforma** (ACS): estado del stack (experiencia Victoria/Classic, versión, estado, reinicio pendiente), ventanas de
+  mantenimiento de Splunk de los próximos 30 días, change freezes y ventana preferida; **reinicio** del search head o
+  rolling restart del cluster como tarea que espera a que el stack vuelva (con simulación); **tokens de autenticación**
+  del stack con caducidad y último uso, borrado y **creación de un token nuevo** con usuario y contraseña del stack, que
+  se puede guardar directamente como token del cliente (cifrado) para renovarlo antes de que caduque; exportaciones de
+  apps guardadas; y tabla de todos los clientes con la caducidad de cada token (sin conectar) y, a petición, el estado
+  de cada stack.
 - **Ingesta y licencia**: GB/día de los últimos 7, 30 o 90 días según `license_usage.log`, por índice y sourcetype,
   con su tendencia. Muestra también los entitlements de la suscripción de Splunk Cloud (licencia de ingesta, DDAS,
   DDAA y restauración DDAA, con la misma búsqueda que la Cloud Monitoring Console; requiere el rol `sc_admin`), el % de
@@ -135,8 +171,9 @@ Secciones:
   una versión anterior.
 - **Operaciones masivas**: un mismo backup o restore en varios clientes a la vez.
 - **Comparar clientes**: un cliente de referencia frente a uno o varios clientes (alertas, reportes, macros,
-  dashboards, roles, usuarios, índices y apps): qué falta, qué sobra y qué es distinto, con las diferencias campo a
-  campo. Las alertas, reportes, macros, dashboards y roles se pueden **copiar** de un cliente a otros; antes de
+  dashboards, roles, usuarios, índices, apps y, vía ACS, **tokens HEC, listas de IP y puertos de salida**): qué falta,
+  qué sobra y qué es distinto, con las diferencias campo a campo. Los tokens HEC se copian creándolos con el mismo valor
+  o actualizándolos; en las listas y puertos solo se añaden las subredes que faltan (nunca se quita ninguna). Las alertas, reportes, macros, dashboards y roles se pueden **copiar** de un cliente a otros; antes de
   sobrescribir se guarda lo que había en `backups/<tipo>/…antes_de_copiar_<host>_backup.json`. En alertas y reportes,
   **Emparejar TEST y producción** pone `TEST - CU-X` y `CU-X` en la misma fila para ver en qué fase está cada cliente
   (en cada uno se compara la misma fase que en la referencia, o la otra si no la tiene); la copia usa el nombre real.
@@ -144,13 +181,25 @@ Secciones:
 - **Add-ons**: apps y add-ons de Splunkbase con una versión nueva en el cliente activo (las del aviso «Update» de Manage
   Apps), con sus notas (cambio de versión mayor, deshabilitada, no gestionable por ACS) y enlace a Splunkbase; se
   actualizan las seleccionadas o todas como tarea cancelable, de una en una vía ACS. Tarjeta «Todos los clientes» con
-  las pendientes de cada cliente (pulsar una fila cambia a ese cliente) y gestión de la cuenta de Splunkbase (se
-  comprueba en Splunkbase antes de guardarla cifrada). Ver «Actualizar add-ons y apps de Splunkbase».
-- **Informes**: informe de uno o varios clientes con salud, ingesta, inventario y análisis de alertas, índices y usuarios/roles,
+  las pendientes de cada cliente (pulsar una fila cambia a ese cliente), desde la que se pueden **actualizar las
+  pendientes de varios clientes a la vez** (cliente a cliente, con opción de dejar fuera las que cambian de versión
+  mayor), y gestión de la cuenta de Splunkbase (se comprueba en Splunkbase antes de guardarla cifrada). Ver
+  «Actualizar add-ons y apps de Splunkbase».
+- **Informes**: informe de uno o varios clientes con salud, ingesta, inventario y análisis de alertas, índices,
+  usuarios/roles y **plataforma** (tipo y experiencia, versión del stack, reinicio pendiente, caducidad del token,
+  tokens del stack, add-ons pendientes, tokens HEC, listas de IP, puertos de salida, próxima ventana y change freezes),
   en **Excel**, **HTML** (para ver o imprimir) y **PDF** (se genera con Microsoft Edge en modo headless). Se guardan en
   `informes/`. También desde «Salud de clientes» → «Exportar informe…».
 - **Clientes**: alta, edición, borrado y prueba de cada credencial antes de guardar (las contraseñas y tokens nunca
   se envían al navegador). Cada cliente puede indicar su **App SIRT** si allí no se llama `sirt_soc_app_for_splunk`.
+  La columna **Plataforma** indica si es Splunk Cloud (y Victoria o Classic una vez consultado ACS) o Enterprise, si ACS
+  está disponible (hace falta el token de un `sc_admin`) y cuándo caduca el token; las secciones de ACS avisan en lugar
+  de fallar cuando el cliente no lo admite.
+- **Auditoría**: registro de todos los cambios hechos desde la web o el CLI (ediciones de alertas y macros, habilitar o
+  deshabilitar, restores, copias entre clientes, add-ons, tokens HEC, listas de IP, tokens, reinicios, exportaciones,
+  altas y bajas de clientes), con fecha, origen, usuario de Windows, cliente, resultado y detalle (nunca credenciales),
+  filtros y exportación a CSV. Las tareas se registran al iniciarse y al terminar. Se guarda en `logs/auditoria.jsonl`
+  (al superar 20 MB se renombra con la fecha). Los backups «antes de editar» siguen guardando el contenido anterior.
 - **Actividad**: cada backup/restore se ejecuta como tarea en segundo plano con su log en vivo. Las tareas largas de
   «Validar app» muestran su progreso (n de m) y se pueden **cancelar**: paran al terminar la búsqueda en curso.
 
@@ -272,6 +321,24 @@ en ACS como de Splunkbase (instaladas por soporte de Splunk) se muestran pero no
 saltos de versión mayor (11.x → 12.0) se marcan para revisar antes sus notas de la versión. Si la licencia que espera ACS
 no es la que publica Splunkbase, se repite la petición con la que indica ACS.
 
+## Plataforma vía ACS: requisitos y límites
+
+Todo lo de ACS (add-ons, tokens HEC, listas de IP y puertos, estado y reinicio, mantenimiento, tokens y exportación de
+apps) usa la API REST del Admin Config Service (`https://admin.splunk.com/<stack>/adminconfig/v2/...`), la misma que el
+ACS CLI de Splunk, así que no hace falta instalar el CLI. Requisitos y límites:
+
+- Solo **Splunk Cloud** (`*.splunkcloud.com`): en Splunk Enterprise esas secciones avisan de que no hay ACS.
+- El **token** del cliente debe ser de un usuario con el rol `sc_admin` (exportar apps necesita además la capacidad
+  `export_apps`). Si el token ha caducado, Plataforma → Tokens permite crear otro con usuario y contraseña del stack
+  y guardarlo como token del cliente. Los tokens solo valen en el search head donde se crearon.
+- ACS responde `409` si hay otra operación en curso en el stack: las tareas van cliente a cliente y app a app. Las
+  altas y cambios de HEC son asíncronos (ACS responde 202) y se espera a que queden aplicados.
+- `federated-search` solo tiene lista IPv6 en ACS. Los stacks FedRAMP no admiten tokens ni exportación.
+- Todas las operaciones de escritura admiten **simulación** (web: botón o casilla «Simular»; CLI: `--simular`) que
+  muestra el método, la URL y el cuerpo de la petición que se enviaría sin enviarla, y quedan en la auditoría.
+- Los inventarios (HEC, listas, tokens, índices, exportaciones) se guardan en `backups/<tipo>/` con historial, así que
+  un inventario programado deja constancia de cómo estaba cada stack cada semana.
+
 ## Historial de backups
 
 Cada backup (desde la web o el CLI) guarda además una copia con fecha en
@@ -328,14 +395,18 @@ main_cli.py --deshabilitar "CU-AD-001,CU-FW-*" --clientes todos --simular    # q
 main_cli.py --addons --clientes todos                              # apps y add-ons con actualización pendiente
 main_cli.py --actualizar-addons "Splunk_TA_windows,TA-*" --clientes CLI1 --simular   # qué se actualizaría
 main_cli.py --actualizar-addons todos --clientes CLI1              # actualiza con la cuenta de Splunkbase de config.py
+main_cli.py --actualizar-addons todos --sin-mayores --clientes todos   # todas menos las que cambian de versión mayor
+main_cli.py --estado --hec --acceso --tokens --indices --clientes todos  # inventario de la plataforma (ACS) con backup
+main_cli.py --exportar-apps "sirt_soc_app_for_splunk" --clientes todos   # exporta la app como .tgz vía ACS
+main_cli.py --reiniciar --clientes CLI1 --simular                  # muestra la petición de reinicio sin enviarla
 main_cli.py --listar-clientes
 ```
 
 - **Clientes**: `--clientes todos` o nombres separados por comas (sin distinguir mayúsculas); `--excluir` quita algunos.
 - **Backups** (`--backup`): `alertas` (CU-\* y TEST - CU-\*), `es`, `reportes`, `macros`, `usuarios`, `roles` o `todo`.
   Se guardan igual que desde la web, con su historial de versiones, y leen las saved searches de todas las apps y usuarios.
-- **Informes** (`--informe`): secciones `salud`, `ingesta`, `alertas`, `analisis`, `indices`, `usuarios` (por defecto
-  todas), formatos `xlsx`, `html`, `pdf` (por defecto Excel y PDF), `--dias 7|30|90` (por defecto 7) y `--por-cliente`
+- **Informes** (`--informe`): secciones `salud`, `ingesta`, `alertas`, `analisis`, `indices`, `usuarios`, `plataforma`
+  (por defecto todas), formatos `xlsx`, `html`, `pdf` (por defecto Excel y PDF), `--dias 7|30|90` (por defecto 7) y `--por-cliente`
   para un archivo por cliente. Se guardan en `informes/`.
 - **Habilitar / deshabilitar** (`--habilitar`, `--deshabilitar`): nombres separados por comas, con comodines
   (`CU-AD-*`, `TEST - CU-*`), en todas las apps y usuarios; `--simular` muestra lo que cambiaría sin tocar nada. Antes de cambiar nada se guarda la configuración en
@@ -343,7 +414,14 @@ main_cli.py --listar-clientes
 - **Add-ons** (`--addons`, `--actualizar-addons`): apps y add-ons de Splunkbase pendientes de actualizar y su
   actualización vía ACS (ver «Actualizar add-ons y apps de Splunkbase»); `--simular` muestra qué se actualizaría. La
   cuenta de Splunkbase sale de `config.py`, de `SPLUNKBASE_USERNAME`/`SPLUNKBASE_PASSWORD` o de `--splunkbase-usuario`
-  más `SPLUNKBASE_PASSWORD`. En el menú interactivo es la opción 21.
+  más `SPLUNKBASE_PASSWORD`; `--sin-mayores` deja fuera las que cambian de versión mayor. En el menú interactivo es la
+  opción 21.
+- **Plataforma (ACS)**: `--estado` (experiencia, versión, reinicio pendiente, ventanas de mantenimiento, change freezes
+  y caducidad del token), `--hec`, `--acceso`, `--tokens` e `--indices` (inventarios con backup en `backups/hec/`,
+  `backups/acceso/`, `backups/tokens/` y `backups/indices/`), `--exportar-apps` (`todos` o nombres; `--sin-local` y
+  `--sin-usuarios` limitan el contenido; a `backups/apps/<stack>/`) y `--reiniciar` (rolling restart en clusters);
+  `--simular` vale para exportar y reiniciar. En el menú interactivo es la opción 22, con submenú.
+- Todas las acciones que cambian algo quedan en `logs/auditoria.jsonl` (ver «Auditoría» en la interfaz web).
 - Todo lo que se muestra se guarda en `logs/AAAAMMDD-HHMMSS_<acción>.log` (se conservan los 200 últimos; `--sin-log` lo
   desactiva). **Código de salida**: 0 correcto, 1 algún cliente u operación falló (ver el log), 2 argumentos no válidos.
   El Programador de tareas lo muestra en «Resultado de la última ejecución».

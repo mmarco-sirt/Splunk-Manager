@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from core import acs
 from core.splunkbase_account import delete_account, get_account, save_account, saved_account
-from options.addons.update_addons import pending_with_acs, update_addons
+from options.addons.update_addons import pending_with_acs, select_pending, update_addons
 from web import services
 from web.jobs import cancel_requested, capture_output, set_progress
 from web.services import ClientError
@@ -84,6 +84,56 @@ def overview(names=None):
 
 
 # --- Actualizar (tarea) ---------------------------------------------------------------------------
+
+def build_update_many(client_names, names, exclude_major=False):
+    """
+    Tarea que actualiza en varios clientes, de uno en uno, las apps pendientes indicadas ('todos' o nombres con
+    comodines). Con exclude_major se dejan fuera las que cambian de versión mayor. Devuelve (título, función).
+    """
+    names = [str(n).strip() for n in (names or []) if str(n).strip()] or ["todos"]
+    clients = [n for n in dict.fromkeys(client_names or []) if n]
+    if not clients:
+        raise ClientError("Seleccione al menos un cliente.")
+    account = get_account()
+    if not account:
+        raise ClientError("No hay cuenta de Splunkbase: guárdela en la sección Add-ons antes de actualizar.")
+    label = "todas las pendientes" if names == ["todos"] else (names[0] if len(names) == 1 else f"{len(names)} apps")
+    title = f"Actualizar add-ons ({label}) · {clients[0] if len(clients) == 1 else f'{len(clients)} clientes'}"
+
+    def action():
+        total = len(clients)
+        for i, name in enumerate(clients):
+            set_progress(i, total, name)
+            if cancel_requested():
+                print("⏹ Cancelado.")
+                break
+            if total > 1:
+                print(f"\n━━━━━━━━━━ {name} ━━━━━━━━━━")
+            try:
+                client = services.find_client(name)
+                reason = acs.unavailable_reason(client)
+                if reason:
+                    print(f"⚠️ {name}: {reason}; se omite.")
+                    continue
+                service = services.get_service(name)
+                chosen = names
+                if exclude_major:
+                    pending, _ = pending_with_acs(service, client)
+                    wanted, _ = select_pending(pending, names)
+                    chosen = [a["name"] for a in wanted if not a["major"]]
+                    skipped = [a["name"] for a in wanted if a["major"]]
+                    if skipped:
+                        print(f"· Se dejan fuera por cambiar de versión mayor: {', '.join(skipped)}")
+                    if not chosen:
+                        print("· No queda nada que actualizar en este cliente.")
+                        continue
+                update_addons(service, client, chosen, account=account, stop=cancel_requested)
+            except Exception as e:
+                print(f"❌ {name}: {e}")
+        set_progress(total, total, "")
+
+    return title, action
+
 
 def build_update(client_name, names):
     """Tarea que actualiza en el cliente las apps pendientes indicadas. Devuelve (título, función)."""
