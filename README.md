@@ -31,6 +31,7 @@ core/
   splunkbase_account.py  Cuenta de Splunkbase guardada en config.py (contraseña cifrada)
 options/
   alerts/                Backup / restore / listado / habilitar y deshabilitar alertas (incl. Enterprise Security)
+                         y vigilancia de alertas disparadas con aviso en el escritorio (watch_alerts.py)
   addons/                Apps y add-ons de Splunkbase con actualización pendiente y su actualización vía ACS
   platform/              Plataforma (ACS) desde la consola: estado, inventarios (HEC, acceso, tokens, índices), export, reinicio
   macros/  users/  roles/  dashboards/  reports/
@@ -338,6 +339,32 @@ ACS CLI de Splunk, así que no hace falta instalar el CLI. Requisitos y límites
   muestra el método, la URL y el cuerpo de la petición que se enviaría sin enviarla, y quedan en la auditoría.
 - Los inventarios (HEC, listas, tokens, índices, exportaciones) se guardan en `backups/<tipo>/` con historial, así que
   un inventario programado deja constancia de cómo estaba cada stack cada semana.
+
+## Vigilancia de alertas (aviso en el escritorio)
+
+Para cuando no llega el correo de las alertas (p. ej. una caída de Microsoft): consulta todos los Splunks cada pocos
+minutos y muestra una notificación de Windows, con sonido y que no se cierra sola, con las alertas nuevas. Solo
+funciona mientras la consola está abierta; no se programa ni cambia nada en los Splunks.
+
+```
+python -m options.alerts.watch_alerts --excluir GRANOLLERS     # todos los clientes menos GRANOLLERS, cada 5 min
+python -m options.alerts.watch_alerts -c FICOSA,PUIG --intervalo 2
+python -m options.alerts.watch_alerts --probar-aviso            # notificación de prueba
+```
+
+Opciones: `-c/--clientes` (`todos` o lista), `--excluir`, `--intervalo` (minutos, 5 por defecto), `--desde` (minutos
+hacia atrás que se revisan al arrancar sin estado previo, 15 por defecto) y `--reiniciar` (olvida lo ya avisado).
+Ctrl+C para parar.
+
+- **Fuente:** el log del planificador (`index=_internal sourcetype=scheduler`), no el índice `alerts`, que no recoge
+  las alertas que solo envían correo ni los notables de ES. El usuario de Splunk debe poder buscar en `_internal`.
+- **Qué se avisa:** ejecuciones con acciones de alerta (correo, logevent, notable, webhook...). Se descartan las de
+  solo mantenimiento (lookup, summary index, telemetría, ITSI, risk), las de **Cyences** (acciones `cyences_*`) y los
+  nombres de `IGNORE_NAMES` / `IGNORE_BY_CLIENT` al principio de `options/alerts/watch_alerts.py`.
+- **Un aviso por ciclo** con el número de alertas por cliente y la última; el detalle (alerta, veces, resultados,
+  horas y acciones) va a la consola y a `logs/AAAAMMDD_vigilancia-alertas.log`.
+- No repite avisos aunque se reinicie (estado en `logs/vigilancia_alertas_estado.json`) y avisa también cuando un
+  cliente deja de responder o vuelve. Al arrancar no recupera lo ocurrido mientras estuvo cerrado más allá de `--desde`.
 
 ## Historial de backups
 
