@@ -8,6 +8,7 @@ que solo hacen mantenimiento (lookups, summary index, telemetría, ITSI, risk) y
 
 Uso (desde la raíz del proyecto):
     python -m options.alerts.watch_alerts --excluir GRANOLLERS
+    python -m options.alerts.watch_alerts --excluir GRANOLLERS --teams     # también al canal de Teams del SOC
     python -m options.alerts.watch_alerts --excluir GRANOLLERS --intervalo 5 --desde 60
 Ctrl+C para parar.
 """
@@ -25,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from core.clients import get_clients_from_config
 from core.connection import _connect, auth_methods
+from core import teams, vault
 from core.paths import logs_dir
 from web.explorer import oneshot_results
 
@@ -157,7 +159,11 @@ _log_file = None
 
 def log(text):
     line = f"[{datetime.datetime.now():%d/%m %H:%M:%S}] {text}"
-    print(line, flush=True)
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(line.encode(encoding, errors="replace").decode(encoding), flush=True)
     if _log_file:
         _log_file.write(line + "\n")
         _log_file.flush()
@@ -167,15 +173,25 @@ def _fmt(epoch):
     return datetime.datetime.fromtimestamp(float(epoch)).strftime("%d/%m %H:%M")
 
 
-def report(client_name, alerts):
-    """Escribe en consola y log el detalle de las alertas nuevas de un cliente."""
+def detail_lines(alerts):
+    """Una línea por alerta distinta: nombre, veces, resultados, horas y acciones."""
     names = {}
     for a in alerts:
         names.setdefault(a.get("savedsearch_name", "?"), []).append(a)
+    out = []
     for name, items in names.items():
         results = sum(int(float(a.get("result_count") or 0)) for a in items)
-        log(f"🚨 {client_name}: {name}  ({len(items)} vez/veces, {results} resultados, "
-            f"{_fmt(items[0]['t'])} - {_fmt(items[-1]['t'])}) [{items[-1].get('alert_actions', '')}]")
+        first, last = _fmt(items[0]["t"]), _fmt(items[-1]["t"])
+        when = first if first == last else f"{first} - {last}"
+        times = f"{len(items)} veces" if len(items) > 1 else "1 vez"
+        out.append(f"{name}  ({times}, {results} resultados, {when}) [{items[-1].get('alert_actions', '')}]")
+    return out
+
+
+def report(client_name, alerts):
+    """Escribe en consola y log el detalle de las alertas nuevas de un cliente."""
+    for line in detail_lines(alerts):
+        log(f"\U0001F6A8 {client_name}: {line}")
 
 
 def summary_lines(by_client):
@@ -187,16 +203,59 @@ def summary_lines(by_client):
     return [clients, last]
 
 
+class TeamsChannel:
+    """Envío al canal de Teams del SOC. Si falla, lo dice en consola y en el escritorio (una vez hasta que se recupere)."""
+    MAX_LINES = 60
+
+    def __init__(self, url):
+        self.url = url
+        self.failing = False
+
+    def send(self, title, blocks, color="attention"):
+        try:
+            teams.post(self.url, teams.card(title, blocks, color))
+        except Exception as e:  # noqa: BLE001
+            log(f"⚠️ Teams: no se ha podido enviar el mensaje ({e})")
+            if not self.failing:
+                toast("⚠️ Vigilancia: falla el envío a Teams", [str(e)[:200]])
+            self.failing = True
+            return False
+        if self.failing:
+            log("✅ Teams: el envío vuelve a funcionar")
+        self.failing = False
+        return True
+
+    def alerts(self, by_client):
+        total = sum(len(a) for a in by_client.values())
+        blocks, used = [], 0
+        for name, alerts in by_client.items():
+            lines = [f"- {line}" for line in detail_lines(alerts)]
+            room = max(0, self.MAX_LINES - used)
+            if len(lines) > room:
+                lines = lines[:room] + [f"- … y {len(lines) - room} más (ver el log de la vigilancia)"]
+            used += len(lines)
+            blocks.append((f"{name} ({len(alerts)})", lines))
+        self.send(f"\U0001F6A8 {total} alerta(s) nueva(s) en {len(by_client)} cliente(s)", blocks)
+
+
+_teams = None
+
+
 def notify(by_client):
     total = sum(len(a) for a in by_client.values())
-    toast(f"🚨 {total} alerta(s) nueva(s) en {len(by_client)} cliente(s)", summary_lines(by_client))
+    toast(f"\U0001F6A8 {total} alerta(s) nueva(s) en {len(by_client)} cliente(s)", summary_lines(by_client))
+    if _teams:
+        _teams.alerts(by_client)
 
 
 # --- Consulta ---
 
 class Watcher:
-    def __init__(self, clients, interval, since_minutes, state_path):
+    def __init__(self, clients, interval, since_minutes, state_path, heartbeat=0):
         self.clients = clients
+        self.heartbeat = heartbeat
+        self.last_heartbeat = time.time()
+        self.alerts_since_heartbeat = 0
         self.interval = interval
         self.state_path = state_path
         self.services = {}
@@ -247,11 +306,16 @@ class Watcher:
                 if self.errors.get(name) != error:
                     log(f"⚠️ {name}: {error}")
                     toast(f"⚠️ Vigilancia: {name} no responde", [error[:200]])
+                    if _teams and name not in self.errors:
+                        _teams.send(f"⚠️ Vigilancia de alertas: {name} no responde",
+                                    [(None, [f"No se pueden consultar sus alertas: {error[:300]}"])], "warning")
                 self.errors[name] = error
                 continue
             if name in self.errors:
                 log(f"✅ {name}: vuelve a responder")
                 self.errors.pop(name)
+                if _teams:
+                    _teams.send(f"✅ Vigilancia de alertas: {name} vuelve a responder", [], "good")
             try:
                 fired = new_alerts(rows, name, self.seen)
                 if fired:
@@ -264,6 +328,14 @@ class Watcher:
             notify(by_client)
         self.seen = save_state(self.state_path, self.last, self.seen)
         ok = len(results) - len(self.errors)
+        self.alerts_since_heartbeat += total
+        if _teams and self.heartbeat and time.time() - self.last_heartbeat >= self.heartbeat * 60:
+            _teams.send("💚 Vigilancia de alertas activa",
+                        [(None, [f"{self.alerts_since_heartbeat} alerta(s) en los últimos {self.heartbeat:g} min; "
+                                 f"{ok}/{len(results)} clientes respondiendo"
+                                 + (f" (sin respuesta: {', '.join(sorted(self.errors))})" if self.errors else "")])],
+                        "good")
+            self.last_heartbeat, self.alerts_since_heartbeat = time.time(), 0
         log(f"Ciclo terminado: {ok}/{len(results)} clientes consultados, {total} alerta(s) nueva(s)"
             + (f"; sin respuesta: {', '.join(sorted(self.errors))}" if self.errors else ""))
 
@@ -287,13 +359,40 @@ def main(argv=None):
     parser.add_argument("--desde", type=int, default=15,
                         help="al arrancar sin estado previo, minutos hacia atrás que se revisan (por defecto 15)")
     parser.add_argument("--reiniciar", action="store_true", help="ignora el estado guardado (vuelve a avisar de todo)")
-    parser.add_argument("--probar-aviso", action="store_true", help="muestra una notificación de prueba y termina")
+    parser.add_argument("--probar-aviso", action="store_true",
+                        help="muestra una notificación de prueba (y la envía a Teams con --teams) y termina")
+    parser.add_argument("--teams", action="store_true",
+                        help="envía también las alertas al canal de Teams (webhook guardado con --guardar-teams)")
+    parser.add_argument("--latido", type=float, default=60, metavar="MIN",
+                        help="con --teams, mensaje de 'vigilancia activa' cada MIN minutos (0 = nunca; 60 por defecto)")
+    parser.add_argument("--guardar-teams", action="store_true",
+                        help="pide la URL del webhook de Teams, la guarda cifrada en config.py y termina")
     args = parser.parse_args(argv)
 
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    global _teams
+    if args.guardar_teams:
+        teams.save_webhook(input("URL del webhook de Teams: "))
+        print("Webhook de Teams guardado (cifrado) en config.py.")
+        return 0
+    if args.teams:
+        try:
+            url = teams.get_webhook()
+        except vault.VaultError as e:
+            print(f"No se puede descifrar el webhook de Teams de config.py ({e}); vuelva a guardarlo con --guardar-teams.")
+            return 1
+        if not url:
+            print("No hay webhook de Teams guardado: use --guardar-teams.")
+            return 1
+        _teams = TeamsChannel(url)
     if args.probar_aviso:
         toast("🚨 PRUEBA: 1 alerta(s)", ["Aviso de prueba de la vigilancia de alertas", "Si ves esto, funciona"])
+        if _teams:
+            ok = _teams.send("🧪 Prueba de la vigilancia de alertas",
+                             [(None, ["Mensaje de prueba: si lo ves aquí, los avisos de alertas llegarán a este canal."])],
+                             "default")
+            print("Mensaje de prueba enviado a Teams." if ok else "No se ha podido enviar a Teams (ver arriba).")
         return 0
 
     clients = get_clients_from_config()
@@ -311,12 +410,19 @@ def main(argv=None):
         os.remove(state_path)
     _log_file = open(os.path.join(logs_dir(), f"{datetime.datetime.now():%Y%m%d}_vigilancia-alertas.log"), "a",
                      encoding="utf-8")
-    log(f"Vigilando {len(clients)} clientes cada {args.intervalo:g} min"
-        + (f" (excluidos: {', '.join(sorted(excluded))})" if excluded else "") + ". Ctrl+C para parar.")
+    scope = f"{len(clients)} clientes cada {args.intervalo:g} min" + (
+        f" (excluidos: {', '.join(sorted(excluded))})" if excluded else "")
+    log(f"Vigilando {scope}" + (" con avisos también en Teams" if _teams else "") + ". Ctrl+C para parar.")
+    if _teams:
+        _teams.send("▶️ Vigilancia de alertas iniciada", [(None, [f"Se vigilan {scope}."])], "good")
     try:
-        Watcher(clients, args.intervalo, args.desde, state_path).run()
+        Watcher(clients, args.intervalo, args.desde, state_path, args.latido if _teams else 0).run()
     except KeyboardInterrupt:
         log("Vigilancia detenida.")
+        if _teams:
+            _teams.send("⏹️ Vigilancia de alertas detenida",
+                        [(None, ["A partir de ahora no se avisará en este canal hasta que se vuelva a iniciar."])],
+                        "warning")
     return 0
 
 

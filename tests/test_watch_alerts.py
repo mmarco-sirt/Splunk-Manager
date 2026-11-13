@@ -53,5 +53,39 @@ class NewAlertsTests(unittest.TestCase):
             self.assertEqual(set(loaded), {"nuevo"})
 
 
+class TeamsMessageTests(unittest.TestCase):
+    def test_card_and_detail(self):
+        alerts = [row("A", "email", t="1700000000", sid="1", count="2"), row("A", "email", t="1700000600", sid="2"),
+                  row("B", "logevent", sid="3", count="1")]
+        lines = w.detail_lines(alerts)
+        self.assertEqual(len(lines), 2)
+        self.assertIn("2 veces, 5 resultados", lines[0])
+        self.assertIn("1 vez, 1 resultados", lines[1])
+
+        sent = []
+        channel = w.TeamsChannel("https://example.invalid/hook")
+        original = w.teams.post
+        w.teams.post = lambda url, message: sent.append(message)
+        try:
+            channel.alerts({"FICOSA": alerts})
+        finally:
+            w.teams.post = original
+        body = sent[0]["attachments"][0]["content"]["body"]
+        self.assertEqual(sent[0]["attachments"][0]["contentType"], "application/vnd.microsoft.card.adaptive")
+        self.assertIn("3 alerta(s) nueva(s) en 1 cliente(s)", body[0]["text"])
+        self.assertEqual(body[1]["text"], "FICOSA (3)")
+
+    def test_failure_does_not_raise(self):
+        channel = w.TeamsChannel("https://example.invalid/hook")
+        original_post, original_toast = w.teams.post, w.toast
+        w.teams.post = lambda url, message: (_ for _ in ()).throw(OSError("caído"))
+        w.toast = lambda title, lines: None
+        try:
+            self.assertFalse(channel.send("t", []))
+            self.assertTrue(channel.failing)
+        finally:
+            w.teams.post, w.toast = original_post, original_toast
+
+
 if __name__ == "__main__":
     unittest.main()

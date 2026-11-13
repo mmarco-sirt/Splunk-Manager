@@ -29,6 +29,7 @@ core/
                          mantenimiento, tokens HEC, listas de IP y puertos de salida, tokens JWT y exportación de apps
   audit.py               Registro de auditoría (logs/auditoria.jsonl): qué se cambió, dónde, cuándo, desde dónde y resultado
   splunkbase_account.py  Cuenta de Splunkbase guardada en config.py (contraseña cifrada)
+  teams.py               Webhook de Teams (Workflows) guardado cifrado en config.py y envío de mensajes (Adaptive Cards)
 options/
   alerts/                Backup / restore / listado / habilitar y deshabilitar alertas (incl. Enterprise Security)
                          y vigilancia de alertas disparadas con aviso en el escritorio (watch_alerts.py)
@@ -355,6 +356,20 @@ python -m options.alerts.watch_alerts --probar-aviso            # notificación 
 Opciones: `-c/--clientes` (`todos` o lista), `--excluir`, `--intervalo` (minutos, 5 por defecto), `--desde` (minutos
 hacia atrás que se revisan al arrancar sin estado previo, 15 por defecto) y `--reiniciar` (olvida lo ya avisado).
 Ctrl+C para parar.
+
+**Canal de Teams del SOC** (`--teams`): además del aviso en el escritorio, publica cada ciclo un mensaje con el
+detalle de las alertas nuevas por cliente, y avisa al iniciar y al parar la vigilancia, cuando un cliente deja de
+responder o vuelve, y con un «vigilancia activa» cada `--latido` minutos (60 por defecto; 0 lo desactiva). Usa un
+flujo de Workflows del canal (plantilla «Publicar en un canal cuando se recibe una solicitud de webhook»); su URL se
+guarda cifrada en config.py (`teams = {"webhook": "dpapi:..."}`) con:
+
+```
+python -m options.alerts.watch_alerts --guardar-teams                        # pide la URL y la guarda
+python -m options.alerts.watch_alerts --teams --probar-aviso                 # mensaje de prueba al canal
+python -m options.alerts.watch_alerts --excluir GRANOLLERS,PUIG --teams
+```
+
+Si falla el envío a Teams se avisa en el escritorio y la vigilancia sigue.
 
 - **Fuente:** el log del planificador (`index=_internal sourcetype=scheduler`), no el índice `alerts`, que no recoge
   las alertas que solo envían correo ni los notables de ES. El usuario de Splunk debe poder buscar en `_internal`.
