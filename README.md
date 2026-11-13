@@ -354,8 +354,8 @@ python -m options.alerts.watch_alerts --probar-aviso            # notificación 
 ```
 
 Opciones: `-c/--clientes` (`todos` o lista), `--excluir`, `--intervalo` (minutos, 5 por defecto), `--desde` (minutos
-hacia atrás que se revisan al arrancar sin estado previo, 15 por defecto) y `--reiniciar` (olvida lo ya avisado).
-Ctrl+C para parar.
+hacia atrás que se revisan al arrancar sin estado previo, 15 por defecto), `--destinatario` (correo que deben tener
+las alertas, soc@sirt.com por defecto) y `--reiniciar` (olvida lo ya avisado). Ctrl+C para parar.
 
 **Canal de Teams del SOC** (`--teams`): además del aviso en el escritorio, publica cada ciclo un mensaje con el
 detalle de las alertas nuevas por cliente, y avisa al iniciar y al parar la vigilancia, cuando un cliente deja de
@@ -373,9 +373,12 @@ Si falla el envío a Teams se avisa en el escritorio y la vigilancia sigue.
 
 - **Fuente:** el log del planificador (`index=_internal sourcetype=scheduler`), no el índice `alerts`, que no recoge
   las alertas que solo envían correo ni los notables de ES. El usuario de Splunk debe poder buscar en `_internal`.
-- **Qué se avisa:** ejecuciones con acciones de alerta (correo, logevent, notable, webhook...). Se descartan las de
-  solo mantenimiento (lookup, summary index, telemetría, ITSI, risk), las de **Cyences** (acciones `cyences_*`) y los
-  nombres de `IGNORE_NAMES` / `IGNORE_BY_CLIENT` al principio de `options/alerts/watch_alerts.py`.
+- **Qué se avisa:** solo las alertas **productivas**: las que han enviado el correo (acción `email` en esa
+  ejecución) y lo envían a **soc@sirt.com** (en `action.email.to`, `cc` o `bcc`, aunque haya más destinatarios).
+  Los destinatarios se leen de la configuración de las alertas de cada Splunk y se refrescan cada 30 minutos (antes si
+  salta una alerta que no conocía). Así quedan fuera Cyences, notables sin correo, alertas en pruebas que solo van a
+  una persona y las que solo escriben en el índice `alerts`. Otra dirección con `--destinatario`. Se descartan además
+  los nombres de `IGNORE_NAMES` / `IGNORE_BY_CLIENT` al principio de `options/alerts/watch_alerts.py`.
 - **Un aviso por ciclo** con el número de alertas por cliente y la última; el detalle (alerta, veces, resultados,
   horas y acciones) va a la consola y a `logs/AAAAMMDD_vigilancia-alertas.log`.
 - No repite avisos aunque se reinicie (estado en `logs/vigilancia_alertas_estado.json`) y avisa también cuando un

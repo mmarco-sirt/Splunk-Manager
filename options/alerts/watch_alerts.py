@@ -2,9 +2,9 @@
 Vigilancia de alertas: consulta cada pocos minutos todos los Splunks y avisa en el escritorio de Windows de cada alerta
 que se dispara. Pensado para cuando no llega el correo (incidencias de Microsoft).
 
-Fuente: el log del planificador (index=_internal sourcetype=scheduler). Ahí aparece toda búsqueda programada que ha
-ejecutado acciones, escriba o no en el índice alerts (Cyences, notables de ES, alertas por correo...). Se descartan las
-que solo hacen mantenimiento (lookups, summary index, telemetría, ITSI, risk) y los nombres de IGNORE_NAMES.
+Fuente: el log del planificador (index=_internal sourcetype=scheduler), donde aparece toda búsqueda programada que ha
+ejecutado acciones. Solo se avisan las que han enviado el correo y lo envían a soc@sirt.com (REQUIRED_RECIPIENT;
+destinatarios leídos de la configuración de cada alerta), salvo los nombres de IGNORE_NAMES / IGNORE_BY_CLIENT.
 
 Uso (desde la raíz del proyecto):
     python -m options.alerts.watch_alerts --excluir GRANOLLERS
@@ -18,6 +18,7 @@ import datetime
 import fnmatch
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -30,12 +31,11 @@ from core import teams, vault
 from core.paths import logs_dir
 from web.explorer import oneshot_results
 
-# Acciones que no suponen avisar a nadie: si una ejecución solo tiene estas, no es una alerta
-MAINTENANCE_ACTIONS = {
-    "lookup", "outputlookup", "summary_index", "outputtelemetry", "itsi_import_objects", "itsi_summary_metrics_collect",
-    "indicator", "risk", "output_message", "cyences_send_digest_email_action",
-}
-# Búsquedas que disparan acciones de alerta pero son ruido (generadores, KPIs...). Comodines fnmatch, sin mayúsculas.
+# Solo se avisan las alertas cuyo correo (action.email.to/cc/bcc) incluye esta dirección
+REQUIRED_RECIPIENT = "soc@sirt.com"
+RECIPIENTS_TTL = 30 * 60       # cada cuánto se vuelven a leer los destinatarios de las alertas de cada Splunk
+RECIPIENTS_RETRY = 5 * 60      # si salta una alerta desconocida, se releen como mucho con esta frecuencia
+# Búsquedas que se descartan aunque cumplan lo anterior. Comodines fnmatch, sin mayúsculas.
 IGNORE_NAMES = [
     "lookup generator*",
     "alimentar brs",
@@ -64,24 +64,64 @@ POWERSHELL_AUMID = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v
 
 # --- Filtro ---
 
-def is_alert(row, client_name):
-    """True si la ejecución del planificador es una alerta que hay que avisar."""
+def parse_emails(*values):
+    """Direcciones de correo (en minúsculas) de los campos action.email.to/cc/bcc, separadas por comas, ; o espacios."""
+    found = set()
+    for value in values:
+        for part in re.split(r"[,;\s]+", str(value or "")):
+            if "@" in part:
+                found.add(part.strip().strip("<>\"'").lower())
+    return found
+
+
+def recipients_map(entries):
+    """
+    {(app, nombre): destinatarios} de las búsquedas guardadas (entradas JSON de /servicesNS/-/-/saved/searches), más
+    {("", nombre): destinatarios} uniendo todas las apps, por si la app del log no coincide.
+    """
+    result = {}
+    for entry in entries:
+        content = entry.get("content") or {}
+        emails = parse_emails(content.get("action.email.to"), content.get("action.email.cc"),
+                              content.get("action.email.bcc"))
+        name, app = entry.get("name") or "", (entry.get("acl") or {}).get("app") or ""
+        result.setdefault((app, name), set()).update(emails)
+        result.setdefault(("", name), set()).update(emails)
+    return result
+
+
+def recipients_of(row, recipients):
+    name = row.get("savedsearch_name") or ""
+    found = recipients.get((row.get("app") or "", name))
+    return found if found is not None else recipients.get(("", name))
+
+
+def _actions(row):
     raw = row.get("alert_actions") or ""
     raw = ",".join(raw) if isinstance(raw, list) else raw
-    # Las alertas de Cyences (acciones cyences_*) no se avisan
-    actions = {a.strip() for a in raw.split(",") if a.strip() and not a.strip().startswith("cyences_")}
-    if not actions or actions <= MAINTENANCE_ACTIONS:
+    return {a.strip() for a in raw.split(",") if a.strip()}
+
+
+def is_alert(row, client_name, recipients, required=REQUIRED_RECIPIENT):
+    """
+    True si la ejecución del planificador es una alerta productiva que hay que avisar: ha enviado el correo (acción
+    email) y entre sus destinatarios (to, cc o bcc) está 'required'. Así quedan fuera Cyences, notables sin correo,
+    pruebas que solo van a una persona, etc.
+    """
+    if "email" not in _actions(row):
         return False
     name = (row.get("savedsearch_name") or "").strip().lower()
     patterns = IGNORE_NAMES + IGNORE_BY_CLIENT.get(client_name.upper(), [])
-    return not any(fnmatch.fnmatch(name, p) for p in patterns)
+    if any(fnmatch.fnmatch(name, p) for p in patterns):
+        return False
+    return required.lower() in (recipients_of(row, recipients) or set())
 
 
-def new_alerts(rows, client_name, seen):
+def new_alerts(rows, client_name, seen, recipients, required=REQUIRED_RECIPIENT):
     """Filtra las filas y devuelve las alertas cuyo sid no se ha avisado ya (y las marca como vistas)."""
     found = []
     for row in sorted(rows, key=lambda r: float(r.get("t") or 0)):
-        if not is_alert(row, client_name):
+        if not is_alert(row, client_name, recipients, required):
             continue
         key = f"{client_name}|{row.get('sid') or row.get('savedsearch_name')}|{row.get('t')}"
         if key in seen:
@@ -251,8 +291,10 @@ def notify(by_client):
 # --- Consulta ---
 
 class Watcher:
-    def __init__(self, clients, interval, since_minutes, state_path, heartbeat=0):
+    def __init__(self, clients, interval, since_minutes, state_path, heartbeat=0, required=REQUIRED_RECIPIENT):
         self.clients = clients
+        self.required = required
+        self.recipients = {}
         self.heartbeat = heartbeat
         self.last_heartbeat = time.time()
         self.alerts_since_heartbeat = 0
@@ -287,21 +329,44 @@ class Watcher:
             self.services.pop(client["name"], None)
             return oneshot_results(self._service(client), FIRED_SPL.format(earliest=int(earliest)))
 
+    def _load_recipients(self, client):
+        response = self._service(client).get("/servicesNS/-/-/saved/searches", output_mode="json", count=0,
+                                             search="is_scheduled=1",
+                                             f=["action.email.to", "action.email.cc", "action.email.bcc", "eai:acl"])
+        entries = json.loads(response.body.read().decode("utf-8")).get("entry", [])
+        self.recipients[client["name"]] = (time.time(), recipients_map(entries))
+
+    def _recipients(self, client, rows):
+        """Destinatarios de las alertas del cliente; se releen si caducan o si ha saltado una alerta desconocida."""
+        name = client["name"]
+        loaded, mapping = self.recipients.get(name, (0, None))
+        age = time.time() - loaded
+        unknown = mapping is not None and any(
+            "email" in _actions(r) and recipients_of(r, mapping) is None for r in rows)
+        if mapping is None or age >= RECIPIENTS_TTL or (unknown and age >= RECIPIENTS_RETRY):
+            try:
+                self._load_recipients(client)
+            except Exception:
+                self.services.pop(name, None)
+                self._load_recipients(client)
+        return self.recipients[name][1]
+
     def check(self, client):
         name = client["name"]
         started = time.time()
         try:
             rows = self._query(client, self.last[name] - OVERLAP)
+            recipients = self._recipients(client, rows)
         except Exception as e:  # noqa: BLE001
-            return name, None, str(e)[:300]
+            return name, None, None, str(e)[:300]
         self.last[name] = started
-        return name, rows, None
+        return name, rows, recipients, None
 
     def cycle(self):
         with ThreadPoolExecutor(8) as pool:
             results = list(pool.map(self.check, self.clients))
         by_client = {}
-        for name, rows, error in results:
+        for name, rows, recipients, error in results:
             if error:
                 if self.errors.get(name) != error:
                     log(f"⚠️ {name}: {error}")
@@ -317,7 +382,7 @@ class Watcher:
                 if _teams:
                     _teams.send(f"✅ Vigilancia de alertas: {name} vuelve a responder", [], "good")
             try:
-                fired = new_alerts(rows, name, self.seen)
+                fired = new_alerts(rows, name, self.seen, recipients, self.required)
                 if fired:
                     by_client[name] = fired
                     report(name, fired)
@@ -359,6 +424,8 @@ def main(argv=None):
     parser.add_argument("--desde", type=int, default=15,
                         help="al arrancar sin estado previo, minutos hacia atrás que se revisan (por defecto 15)")
     parser.add_argument("--reiniciar", action="store_true", help="ignora el estado guardado (vuelve a avisar de todo)")
+    parser.add_argument("--destinatario", default=REQUIRED_RECIPIENT, metavar="CORREO",
+                        help=f"solo avisa de las alertas cuyo correo va a esta dirección (por defecto {REQUIRED_RECIPIENT})")
     parser.add_argument("--probar-aviso", action="store_true",
                         help="muestra una notificación de prueba (y la envía a Teams con --teams) y termina")
     parser.add_argument("--teams", action="store_true",
@@ -411,12 +478,13 @@ def main(argv=None):
     _log_file = open(os.path.join(logs_dir(), f"{datetime.datetime.now():%Y%m%d}_vigilancia-alertas.log"), "a",
                      encoding="utf-8")
     scope = f"{len(clients)} clientes cada {args.intervalo:g} min" + (
-        f" (excluidos: {', '.join(sorted(excluded))})" if excluded else "")
+        f" (excluidos: {', '.join(sorted(excluded))})" if excluded else "") + f", alertas con correo a {args.destinatario}"
     log(f"Vigilando {scope}" + (" con avisos también en Teams" if _teams else "") + ". Ctrl+C para parar.")
     if _teams:
         _teams.send("▶️ Vigilancia de alertas iniciada", [(None, [f"Se vigilan {scope}."])], "good")
     try:
-        Watcher(clients, args.intervalo, args.desde, state_path, args.latido if _teams else 0).run()
+        Watcher(clients, args.intervalo, args.desde, state_path, args.latido if _teams else 0,
+                args.destinatario.strip()).run()
     except KeyboardInterrupt:
         log("Vigilancia detenida.")
         if _teams:
