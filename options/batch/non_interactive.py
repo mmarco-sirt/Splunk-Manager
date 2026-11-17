@@ -18,6 +18,7 @@ from core.paths import LOGS_ROOT, logs_dir
 from core.splunkbase_account import ENV_PASSWORD, ENV_USERNAME, encrypt_if_plain, get_account
 from options.addons.update_addons import list_pending, parse_names, update_addons
 from options.alerts.backup_alerts import backup_alerts, backup_es_use_cases
+from options.alerts.index_coverage import show_index_coverage
 from options.alerts.toggle_alerts import parse_patterns, set_alerts_enabled
 from options.platform import inventory as platform_cli
 from options.macros.backup_macros import backup_macros
@@ -40,6 +41,7 @@ BACKUP_KINDS = {
     "roles": ("roles", backup_roles),
 }
 REPORT_SECTIONS = {"salud": "health", "ingesta": "ingest", "alertas": "alerts", "analisis": "alert_analysis",
+                   "cobertura": "index_coverage",
                    "indices": "indexes", "usuarios": "users", "plataforma": "platform"}
 INVENTORIES = {   # --<flag>: (título, función(service, client))
     "estado": ("Estado del stack, mantenimiento y token", platform_cli.show_status),
@@ -63,6 +65,8 @@ Ejemplos:
   main_cli.py --estado --hec --acceso --tokens --indices --clientes todos
   main_cli.py --exportar-apps "sirt_soc_app_for_splunk" --clientes todos
   main_cli.py --reiniciar --clientes CLIENTE1 --simular
+  main_cli.py --indices-sin-cu --clientes todos
+  main_cli.py --informe --clientes todos --secciones cobertura --formatos xlsx
 
 Sin argumentos se abre el menú interactivo. Código de salida: 0 correcto, 1 algo falló (ver logs/), 2 argumentos no válidos.
 """
@@ -99,6 +103,8 @@ def build_parser():
                          help="inventario de listas de IP permitidas y puertos de salida (ACS) con backup en backups/acceso/")
     actions.add_argument("--tokens", action="store_true", help="tokens de autenticación del stack (ACS) con backup en backups/tokens/")
     actions.add_argument("--indices", action="store_true", help="inventario de índices con backup en backups/indices/")
+    actions.add_argument("--indices-sin-cu", action="store_true",
+                         help="índices con datos (últimos 7 días) que no consulta ningún caso de uso CU- habilitado")
     actions.add_argument("--exportar-apps", metavar="NOMBRES",
                          help="exporta apps como .tgz vía ACS a backups/apps/: 'todos' o nombres separados por comas")
     actions.add_argument("--reiniciar", action="store_true", help="reinicia el stack vía ACS (rolling restart en clusters)")
@@ -344,6 +350,11 @@ def run_inventories(names, keys):
         run_for_clients(names, fn, with_client=True)()
 
 
+def run_index_coverage(names):
+    print("\n=== Índices sin casos de uso ===")
+    run_for_clients(names, lambda service, client: show_index_coverage(service, client), with_client=True)()
+
+
 def run_export_apps(names, apps, options, dry_run):
     print(f"\n=== Exportar apps: {', '.join(apps)}{' (simulación)' if dry_run else ''} ===")
     run_for_clients(names, lambda service, client: platform_cli.export_apps(service, client, apps, options, dry_run=dry_run),
@@ -398,10 +409,11 @@ def main(argv):
         export_apps = parse_names(args.exportar_apps) if args.exportar_apps else []
         if args.exportar_apps and not export_apps:
             raise UsageError("Indique qué exportar con --exportar-apps: todos o nombres separados por comas.")
-        if not (kinds or enable or disable or report or args.addons or addons or inventories or export_apps or args.reiniciar):
+        if not (kinds or enable or disable or report or args.addons or addons or inventories or args.indices_sin_cu
+                or export_apps or args.reiniciar):
             raise UsageError("Indique al menos una acción: --backup, --habilitar, --deshabilitar, --informe, --addons, "
-                             "--actualizar-addons, --estado, --hec, --acceso, --tokens, --indices, --exportar-apps o "
-                             "--reiniciar (ver --help).")
+                             "--actualizar-addons, --estado, --hec, --acceso, --tokens, --indices, --indices-sin-cu, "
+                             "--exportar-apps o --reiniciar (ver --help).")
         if args.simular and not (enable or disable or addons or export_apps or args.reiniciar):
             raise UsageError("--simular solo se usa con --habilitar, --deshabilitar, --actualizar-addons, --exportar-apps o --reiniciar.")
         if args.sin_mayores and not addons:
@@ -415,7 +427,8 @@ def main(argv):
 
     label = "+".join(a for a, on in (("backup", kinds), ("habilitar", enable), ("deshabilitar", disable),
                                      ("informe", report), ("addons", args.addons), ("actualizar-addons", addons),
-                                     *((k, True) for k in inventories), ("exportar-apps", export_apps),
+                                     *((k, True) for k in inventories), ("indices-sin-cu", args.indices_sin_cu),
+                                     ("exportar-apps", export_apps),
                                      ("reiniciar", args.reiniciar)) if on)
     log_path = None if args.sin_log else _new_log_path(label)
     log_file = open(log_path, "w", encoding="utf-8") if log_path else None
@@ -441,6 +454,8 @@ def main(argv):
             run_update_addons(names, addons, args.simular, account, args.sin_mayores)
         if inventories:
             run_inventories(names, inventories)
+        if args.indices_sin_cu:
+            run_index_coverage(names)
         if export_apps:
             run_export_apps(names, export_apps, export_options, args.simular)
         if args.reiniciar:

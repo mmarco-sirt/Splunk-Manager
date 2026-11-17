@@ -22,6 +22,7 @@ from core.paths import REPORTS_ROOT, reports_dir
 from web import services
 from web.alert_analysis import NOISY_PER_DAY, analyze_alerts, period_for, report_lists
 from web.explorer import INGEST_DAYS, ingest_usage, list_indexes, list_roles, list_saved_searches, list_users
+from web.index_coverage import analyze_client, report_data as coverage_report
 from web.health import LEVEL_LABELS, RANK, check_client, evaluate, monitor
 from web.operations import OperationError
 from web.services import ClientError
@@ -32,6 +33,7 @@ SECTIONS = {
     "ingest": "Ingesta diaria por índice y sourcetype",
     "alerts": "Inventario de alertas",
     "alert_analysis": "Análisis de alertas: ruidosas, muertas y problemas del planificador",
+    "index_coverage": "Índices sin casos de uso: índices con datos que no consulta ningún CU-* habilitado",
     "indexes": "Índices",
     "users": "Usuarios y roles",
     "platform": "Plataforma: tipo, token y caducidad, reinicio pendiente, add-ons pendientes, tokens HEC, listas de IP, puertos de salida y mantenimiento",
@@ -152,6 +154,7 @@ def collect_client(name, sections, days, threshold, ignored):
         "alerts": lambda: sorted((r for r in list_saved_searches(service) if r["is_alert"] or r["is_es"]),
                                  key=lambda r: r["name"].lower()),
         "alert_analysis": lambda: _alert_analysis(service, days),
+        "index_coverage": lambda: coverage_report(analyze_client(service, name)),
         "indexes": lambda: list_indexes(service),
         "users": lambda: {"users": list_users(service), "roles": list_roles(service)},
     }
@@ -268,6 +271,10 @@ def write_excel(path, report):
     if has_analysis:
         columns += [("Disparos de alertas", "int"), ("Alertas ruidosas", "int"), ("Alertas muertas", "int"),
                     ("Alertas con problemas de planificador", "int")]
+    has_coverage = "index_coverage" in sections
+    if has_coverage:
+        columns += [("Índices sin ningún CU", "int"), ("Índices solo con CU inactivos", "int"), ("Índices cubiertos", "int"),
+                    ("CU en cualquier índice", "int")]
     columns += [("Error", "wrap")]
 
     rows = []
@@ -289,6 +296,9 @@ def write_excel(path, report):
         if has_analysis:
             summary = (c.get("alert_analysis") or {}).get("summary") or {}
             row += [summary.get("fired"), summary.get("noisy"), summary.get("dead"), summary.get("scheduler")]
+        if has_coverage:
+            summary = (c.get("index_coverage") or {}).get("summary") or {}
+            row += [summary.get("unused"), summary.get("inactive_only"), summary.get("used"), summary.get("broad_alerts")]
         row += ["\n".join([c["error"] or ""] + [f"{k}: {v}" for k, v in c["errors"].items()]).strip() or None]
         rows.append(row)
     sheets = [Sheet("Resumen", columns, rows)]
@@ -361,6 +371,19 @@ def write_excel(path, report):
                               a["stats"]["errors"], a["stats"]["expected"], "\n".join(a["stats"]["skip_reasons"]),
                               a["stats"]["avg_runtime"]]
                              for c in analyzed for a in c["alert_analysis"]["scheduler"]]))
+
+    if has_coverage:
+        covered = [c for c in clients if c.get("index_coverage")]
+        sheets.append(Sheet("Índices sin CU",
+                            [("Cliente", "text"), ("Índice", "text"), ("Estado", "text"), ("Eventos 7 d", "int"),
+                             ("Último evento", "text"), ("Sourcetypes", "wrap"), ("CU inactivos que lo consultan", "wrap")],
+                            [[c["name"], r["name"], r["status_label"], r["events"], fmt_time(r["last"]), r["sourcetypes_text"],
+                              "\n".join(r["users_text"])]
+                             for c in covered for r in c["index_coverage"]["uncovered"]]))
+        sheets.append(Sheet("CU en cualquier índice",
+                            [("Cliente", "text"), ("Caso de uso", "text"), ("App", "text"), ("Alcance", "text")],
+                            [[c["name"], a["name"], a["app"], a["mode_label"]]
+                             for c in covered for a in c["index_coverage"]["broad"]]))
 
     if "indexes" in sections:
         sheets.append(Sheet("Índices",

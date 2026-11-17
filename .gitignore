@@ -23,3 +23,6 @@ logs/
 
 # Paquetes de app subidos para validarlos (contienen la app y resultados de los clientes)
 apps_subidas/
+
+# Índices ignorados en «Índices sin CU» (nombres de clientes e índices)
+indices_ignorados.json

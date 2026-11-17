@@ -19,6 +19,7 @@ from options.alerts.backup_alerts import TECNOLOGIAS, backup_alerts, backup_aler
 from options.alerts.restore_alerts import restore_alerts
 from options.alerts.list_alerts import list_active_cases
 from options.alerts.toggle_alerts import toggle_alerts_cli
+from options.alerts.index_coverage import index_coverage_cli
 from options.macros.backup_macros import backup_macros
 from options.macros.restore_macros import restore_macros
 from options.users.backup_users import backup_users
@@ -122,6 +123,7 @@ def interactive():
         print("20) Análisis de alertas (ruidosas, muertas, planificador)")
         print("21) Add-ons y apps de Splunkbase: actualizaciones pendientes y actualizar (ACS)")
         print("22) Plataforma (ACS): estado, mantenimiento, tokens HEC, listas de IP, tokens, índices, exportar apps, reiniciar")
+        print("23) Índices sin casos de uso (índices con datos que no consulta ningún CU-)")
         print("0) Exit")
 
         choice = input("Ingrese una opción: ")
@@ -210,6 +212,8 @@ def interactive():
             update_addons_cli(service, current_client)
         elif choice == "22":
             platform_menu_cli(service, current_client)
+        elif choice == "23":
+            index_coverage_cli(service, current_client)
         elif choice == "0":
             print("Saliendo...")
             break

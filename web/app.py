@@ -6,14 +6,14 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 from splunklib.binding import AuthenticationError, HTTPError
 from werkzeug.exceptions import HTTPException
 
-from core import acs, audit
+from core import acs, audit, index_coverage as coverage_rules
 from core.clients import ensure_config_exists, migrate_config
 from core.conventions import SIRT_APP, SIRT_APP_LABEL
 from core.paths import backup_dir
 from options.alerts.backup_alerts import TECNOLOGIAS
 from web import (
     access, addons, alert_analysis, alert_editor, app_diff, app_packages, app_report, app_validation, compare, dependencies,
-    explorer, hec, lookups, macro_editor, multi_edit, operations, platform, reports, services,
+    explorer, hec, index_coverage, lookups, macro_editor, multi_edit, operations, platform, reports, services,
 )
 from web.health import monitor as health_monitor
 from web.jobs import install_output_router, jobs
@@ -166,6 +166,7 @@ def create_app(password=None, restrict_host=True):
     def clients_update(name):
         data = body()
         result = services.update_client(name, data)
+        coverage_rules.rename_client(name, result["name"])   # la lista de índices ignorados sigue al cliente
         audit.record("client.update", f"Modificar el cliente {name}", result["name"],
                      {"host": result["host"], "renamed": result["name"] if result["name"] != name else None,
                       "password": "cambiada" if data.get("password") else ("quitada" if data.get("clear_password") else None),
@@ -295,6 +296,30 @@ def create_app(password=None, restrict_host=True):
         name = client_param()
         service = services.get_service(name)
         return jsonify(alert_analysis.analyze_alerts(service, int(request.args.get("days", 7)), client=services.find_client(name)))
+
+    # --- Cobertura de índices por los casos de uso ---
+
+    @app.get("/api/index-coverage")
+    def index_coverage_get():
+        name = client_param()
+        return jsonify(index_coverage.analyze_client(services.get_service(name), name))
+
+    @app.get("/api/index-coverage/ignored")
+    def index_coverage_ignored_get():
+        name = client_param()
+        services.find_client(name)
+        return jsonify(coverage_rules.load_ignored(name))
+
+    @app.put("/api/index-coverage/ignored")
+    def index_coverage_ignored_put():
+        data = body()
+        name = client_param()
+        services.find_client(name)
+        scope = coverage_rules.GLOBAL_SCOPE if data.get("scope") == "global" else name
+        entries = coverage_rules.save_ignored(scope, data.get("entries") or [])
+        audit.record("index-coverage.ignored", f"Índices ignorados ({'todos los clientes' if scope == '*' else name})",
+                     None if scope == "*" else name, {"indexes": [e["index"] for e in entries]})
+        return jsonify(coverage_rules.load_ignored(name))
 
     # --- Salud de todos los clientes ---
 

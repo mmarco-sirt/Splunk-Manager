@@ -116,6 +116,7 @@
         {% if 'health' in sections %}<th>Estado</th><th>Diagnóstico</th><th class="num">Alertas activas</th><th class="num">Planificador 24 h</th><th class="num">Ingesta 24 h</th><th class="num">Sin datos</th>{% endif %}
         {% if 'ingest' in sections %}<th class="num">Media/día ({{ report.days }} d)</th><th class="num">Licencia/día</th>{% endif %}
         {% if 'alert_analysis' in sections %}<th class="num">Alertas ruidosas</th><th class="num">Alertas muertas</th>{% endif %}
+        {% if 'index_coverage' in sections %}<th class="num">Índices sin CU</th>{% endif %}
       </tr></thead>
       <tbody>
       {% for c in clients %}{% set s = summaries[c.name] %}
@@ -134,6 +135,9 @@
           <td class="num">{% if s.license.ingest %}{{ s.license.ingest|gb }}<div class="muted">media al {{ s.license_use|pct }}</div>{% elif s.license and not s.license.error %}N/A{% else %}—{% endif %}</td>{% endif %}
           {% if 'alert_analysis' in sections %}{% set aa = c.alert_analysis %}
           <td class="num">{{ aa.summary.noisy|num if aa else '—' }}</td><td class="num">{{ aa.summary.dead|num if aa else '—' }}</td>
+          {% endif %}
+          {% if 'index_coverage' in sections %}{% set ic = c.index_coverage %}
+          <td class="num">{% if ic %}{{ ic.summary.unused|num }}{% if ic.summary.inactive_only %} <span class="muted">+ {{ ic.summary.inactive_only|num }}</span>{% endif %}{% else %}—{% endif %}</td>
           {% endif %}
         </tr>
       {% endfor %}
@@ -269,6 +273,21 @@
       </table>
       {% endif %}
       {% if not aa.noisy and not aa.dead and not aa.scheduler %}<p>Ninguna alerta ruidosa, muerta ni con problemas de planificador.</p>{% endif %}
+    {% endif %}
+
+    {% if c.index_coverage %}{% set ic = c.index_coverage %}
+      <h3>Índices sin casos de uso (datos de los últimos {{ ic.period_days }} días)</h3>
+      <p>{{ ic.summary.with_data|num }} índices con datos: <strong>{{ ic.summary.unused|num }} sin ningún CU</strong>, {{ ic.summary.inactive_only|num }} solo con CU deshabilitados o de pruebas, {{ ic.summary.used|num }} cubiertos y {{ ic.summary.ignored|num }} ignorados ({{ ic.summary.excluded|num }} internos o de sistema excluidos).</p>
+      {% if ic.uncovered %}
+      <table>
+        <thead><tr><th>Índice</th><th>Estado</th><th class="num">Eventos</th><th>Último evento</th><th>Sourcetypes</th></tr></thead>
+        <tbody>{% for r in ic.uncovered[:40] %}<tr><td>{{ r.name }}</td><td>{{ r.status_label }}</td><td class="num">{{ r.events|num }}</td>
+          <td class="nowrap">{{ r.last|time }}</td><td class="wrap">{{ r.sourcetypes_text }}</td></tr>{% endfor %}</tbody>
+      </table>
+      {% if ic.uncovered|length > 40 %}<p class="muted">Y {{ ic.uncovered|length - 40 }} más (ver el informe Excel).</p>{% endif %}
+      {% else %}<p>Todos los índices con datos están cubiertos por algún caso de uso.</p>{% endif %}
+      {% if ic.broad %}<p class="muted">{{ ic.broad|length }} {{ 'caso de uso busca' if ic.broad|length == 1 else 'casos de uso buscan' }} en cualquier índice (index=* o sin índice) y no se cuentan como cobertura: {{ ic.broad|map(attribute='name')|join(', ') }}.</p>{% endif %}
+      {% if ic.warnings %}<p class="muted">Aviso: {{ ic.warnings|join(' · ') }}</p>{% endif %}
     {% endif %}
 
     {% if c.indexes %}
