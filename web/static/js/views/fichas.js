@@ -45,7 +45,7 @@ export default {
       excludedNote.textContent = `Índices omitidos de las fichas (config.py → fichas → indices_excluidos): ${c.excluded_indexes.join(', ') || 'ninguno'}.`;
     }).catch(() => { excludedNote.textContent = 'No se pudo leer la lista de índices omitidos.'; });
 
-    root.append(
+    clear(root).append(
       pageHeader({ title: 'Fichas de cliente', subtitle: 'Hoja resumen por cliente: fuentes por índice, casos de uso por tecnología, apps, integraciones y roles.' }),
       infoBox('Es una instantánea: no incluye tamaños ni volúmenes, que cambian a diario. Crea una carpeta por cliente y un index.html con todos.'),
       h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Clientes'),
