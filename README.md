@@ -56,6 +56,7 @@ web/
   alert_analysis.py      Análisis de alertas: ruidosas, muertas, planificador y tendencia
   compare.py             Comparación de clientes y copia de objetos entre ellos
   reports.py, xlsx.py    Informes en Excel, HTML y PDF
+  fichas.py              Fichas de cliente («cheat sheet» en HTML y Markdown)
   operations.py          Backup/restore desde la web usando las funciones de options/
   jobs.py                Tareas en segundo plano con su log
   templates/ static/     Interfaz (HTML/CSS/JS sin dependencias externas) y plantilla de los informes
@@ -192,6 +193,7 @@ Secciones:
   tokens del stack, add-ons pendientes, tokens HEC, listas de IP, puertos de salida, próxima ventana y change freezes),
   en **Excel**, **HTML** (para ver o imprimir) y **PDF** (se genera con Microsoft Edge en modo headless). Se guardan en
   `informes/`. También desde «Salud de clientes» → «Exportar informe…».
+- **Fichas de cliente**: hoja resumen por cliente, en HTML y Markdown, una carpeta por cliente (ver «Fichas de cliente»).
 - **Clientes**: alta, edición, borrado y prueba de cada credencial antes de guardar (las contraseñas y tokens nunca
   se envían al navegador). Cada cliente puede indicar su **App SIRT** si allí no se llama `sirt_soc_app_for_splunk`.
   La columna **Plataforma** indica si es Splunk Cloud (y Victoria o Classic una vez consultado ACS) o Enterprise, si ACS
@@ -341,6 +343,45 @@ ACS CLI de Splunk, así que no hace falta instalar el CLI. Requisitos y límites
 - Los inventarios (HEC, listas, tokens, índices, exportaciones) se guardan en `backups/<tipo>/` con historial, así que
   un inventario programado deja constancia de cómo estaba cada stack cada semana.
 
+## Fichas de cliente
+
+Una hoja resumen («cheat sheet») por cliente para saber de un vistazo qué tiene cada uno, pensada para publicarse
+(p. ej. en SharePoint) sin mantenerla: es una **instantánea** y no incluye nada que cambie a diario (tamaños, volúmenes,
+salud). Se genera desde la web (Gestión → Fichas de cliente) o con `--fichas` en el CLI.
+
+Cada ficha lleva:
+- **Atención** (máximo 5 líneas, solo estructural): índices con datos y 0 CU activos, tecnologías con CU deshabilitados
+  y tokens HEC o roles de prueba (nombres con test, prueba, demo, tmp o temp).
+- **General**: plataforma, versión, app SIRT, Enterprise Security y cifras clave.
+- **Fuentes de datos por índice**: sourcetypes con datos en los últimos 7 días y nº de CU activos que usan el índice.
+- **Casos de uso por tecnología**: producción, TEST y deshabilitados, con sus tácticas y el listado. En
+  `CU-<táctica>-<tecnología>-<id>-<MITRE>` la tecnología es el tercer bloque (AD, FW, AV…); lo que no sigue la
+  convención va a `SIN-TEC`. Las alertas que no son CU se cuentan aparte: Cyences (app que empieza por «cyences»),
+  otras y correlation searches de ES.
+- **Cómo buscar**: por tecnología, los índices y sourcetypes que consultan sus CU (los de alcance amplio no cuentan) y un
+  SPL de ejemplo. Los sourcetypes se cruzan con los que de verdad tiene el índice, porque los CU basados en eventtypes
+  expanden sourcetypes genéricos. Si la tecnología solo tiene CU deshabilitados o el índice no tiene datos, se indica.
+- **Apps y add-ons** (sin los componentes internos de Splunk), **integraciones** (tokens HEC sin su valor, puertos de
+  salida e IP permitidas, vía ACS) y **accesos** (nº de usuarios y roles).
+
+**Índices excluidos**: no se muestran ni se cuentan en la tabla de fuentes, en «Cómo buscar», en «Atención» ni en el
+recuento de índices con datos. La lista está en `config.py` (admite comodines `*` y `?`) y la ficha indica al pie cuáles
+se omiten:
+
+```python
+fichas = {"indices_excluidos": ["cyences", "alert_config", "summary"]}
+```
+
+Genera `<salida>/<CLIENTE>/Ficha_<CLIENTE>.html` y `.md`, y un `index.html` con todos los clientes. El HTML es
+autocontenido (buscador y listas desplegables); si SharePoint no ejecuta su JavaScript al previsualizarlo, hay que
+descargarlo o usar el Markdown. Solo lee de los clientes, no cambia nada.
+
+```
+python main_cli.py --fichas --clientes todos --excluir "SIRT/LAB,GRANOLLERS" --salida D:/Fichas_Clientes
+```
+
+Sin `--salida` se crean en `informes/fichas/`.
+
 ## Vigilancia de alertas (aviso en el escritorio)
 
 Para cuando no llega el correo de las alertas (p. ej. una caída de Microsoft): consulta todos los Splunks cada pocos
@@ -453,6 +494,8 @@ main_cli.py --listar-clientes
 - **Informes** (`--informe`): secciones `salud`, `ingesta`, `alertas`, `analisis`, `indices`, `usuarios`, `plataforma`
   (por defecto todas), formatos `xlsx`, `html`, `pdf` (por defecto Excel y PDF), `--dias 7|30|90` (por defecto 7) y `--por-cliente`
   para un archivo por cliente. Se guardan en `informes/`.
+- **Fichas** (`--fichas`): fichas de cliente en HTML y Markdown en `--salida` (por defecto `informes/fichas/`); ver
+  «Fichas de cliente».
 - **Habilitar / deshabilitar** (`--habilitar`, `--deshabilitar`): nombres separados por comas, con comodines
   (`CU-AD-*`, `TEST - CU-*`), en todas las apps y usuarios; `--simular` muestra lo que cambiaría sin tocar nada. Antes de cambiar nada se guarda la configuración en
   el backup «antes_de_editar». También está en el menú interactivo (opción 19), junto al análisis de alertas (opción 20).
