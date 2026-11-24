@@ -14,3 +14,6 @@ clientes = [
 # Cuenta de Splunkbase (splunk.com) para actualizar apps y add-ons vía ACS; la contraseña también se cifra al arrancar.
 # También se puede guardar desde el menú de add-ons del CLI (opción 21).
 # splunkbase = {"username": "usuario@empresa.com", "password": "tu_password"}
+
+# Fichas de cliente: indices que no se muestran ni se cuentan en la ficha (admite comodines * y ?)
+fichas = {"indices_excluidos": ["cyences", "alert_config", "summary"]}

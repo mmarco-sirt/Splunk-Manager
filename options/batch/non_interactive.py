@@ -66,6 +66,7 @@ Ejemplos:
   main_cli.py --exportar-apps "sirt_soc_app_for_splunk" --clientes todos
   main_cli.py --reiniciar --clientes CLIENTE1 --simular
   main_cli.py --indices-sin-cu --clientes todos
+  main_cli.py --fichas --clientes todos --excluir PUIG,GRANOLLERS --salida D:/Fichas_Clientes
   main_cli.py --informe --clientes todos --secciones cobertura --formatos xlsx
 
 Sin argumentos se abre el menú interactivo. Código de salida: 0 correcto, 1 algo falló (ver logs/), 2 argumentos no válidos.
@@ -103,6 +104,8 @@ def build_parser():
                          help="inventario de listas de IP permitidas y puertos de salida (ACS) con backup en backups/acceso/")
     actions.add_argument("--tokens", action="store_true", help="tokens de autenticación del stack (ACS) con backup en backups/tokens/")
     actions.add_argument("--indices", action="store_true", help="inventario de índices con backup en backups/indices/")
+    actions.add_argument("--fichas", action="store_true",
+                         help="fichas de cliente (cheat sheet en HTML y Markdown, una carpeta por cliente); con --salida")
     actions.add_argument("--indices-sin-cu", action="store_true",
                          help="índices con datos (últimos 7 días) que no consulta ningún caso de uso CU- habilitado")
     actions.add_argument("--exportar-apps", metavar="NOMBRES",
@@ -121,6 +124,7 @@ def build_parser():
                         help="horas sin datos para considerar que una fuente ha dejado de enviar (24)")
     report.add_argument("--por-cliente", action="store_true", help="un informe por cliente en lugar de uno conjunto")
     other = parser.add_argument_group("Otros")
+    other.add_argument("--salida", metavar="CARPETA", help="con --fichas: carpeta donde crear las fichas (por defecto informes/fichas)")
     other.add_argument("--simular", action="store_true",
                        help="con --habilitar/--deshabilitar/--actualizar-addons/--exportar-apps/--reiniciar: muestra qué "
                             "cambiaría o la petición que se enviaría a ACS sin tocar nada")
@@ -355,6 +359,13 @@ def run_index_coverage(names):
     run_for_clients(names, lambda service, client: show_index_coverage(service, client), with_client=True)()
 
 
+def run_fichas(names, output):
+    from web.fichas import build_fichas
+    title, run = build_fichas(names, {"output": output})
+    print(f"\n=== {title} ===")
+    run()
+
+
 def run_export_apps(names, apps, options, dry_run):
     print(f"\n=== Exportar apps: {', '.join(apps)}{' (simulación)' if dry_run else ''} ===")
     run_for_clients(names, lambda service, client: platform_cli.export_apps(service, client, apps, options, dry_run=dry_run),
@@ -410,10 +421,10 @@ def main(argv):
         if args.exportar_apps and not export_apps:
             raise UsageError("Indique qué exportar con --exportar-apps: todos o nombres separados por comas.")
         if not (kinds or enable or disable or report or args.addons or addons or inventories or args.indices_sin_cu
-                or export_apps or args.reiniciar):
+                or args.fichas or export_apps or args.reiniciar):
             raise UsageError("Indique al menos una acción: --backup, --habilitar, --deshabilitar, --informe, --addons, "
                              "--actualizar-addons, --estado, --hec, --acceso, --tokens, --indices, --indices-sin-cu, "
-                             "--exportar-apps o --reiniciar (ver --help).")
+                             "--fichas, --exportar-apps o --reiniciar (ver --help).")
         if args.simular and not (enable or disable or addons or export_apps or args.reiniciar):
             raise UsageError("--simular solo se usa con --habilitar, --deshabilitar, --actualizar-addons, --exportar-apps o --reiniciar.")
         if args.sin_mayores and not addons:
@@ -427,7 +438,7 @@ def main(argv):
 
     label = "+".join(a for a, on in (("backup", kinds), ("habilitar", enable), ("deshabilitar", disable),
                                      ("informe", report), ("addons", args.addons), ("actualizar-addons", addons),
-                                     *((k, True) for k in inventories), ("indices-sin-cu", args.indices_sin_cu),
+                                     *((k, True) for k in inventories), ("indices-sin-cu", args.indices_sin_cu), ("fichas", args.fichas),
                                      ("exportar-apps", export_apps),
                                      ("reiniciar", args.reiniciar)) if on)
     log_path = None if args.sin_log else _new_log_path(label)
@@ -456,6 +467,8 @@ def main(argv):
             run_inventories(names, inventories)
         if args.indices_sin_cu:
             run_index_coverage(names)
+        if args.fichas:
+            run_fichas(names, args.salida)
         if export_apps:
             run_export_apps(names, export_apps, export_options, args.simular)
         if args.reiniciar:

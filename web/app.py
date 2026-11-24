@@ -13,7 +13,7 @@ from core.paths import backup_dir
 from options.alerts.backup_alerts import TECNOLOGIAS
 from web import (
     access, addons, alert_analysis, alert_editor, app_diff, app_packages, app_report, app_validation, compare, dependencies,
-    explorer, hec, index_coverage, lookups, macro_editor, multi_edit, operations, platform, reports, services,
+    explorer, fichas, hec, index_coverage, lookups, macro_editor, multi_edit, operations, platform, reports, services,
 )
 from web.health import monitor as health_monitor
 from web.jobs import install_output_router, jobs
@@ -434,6 +434,18 @@ def create_app(password=None, restrict_host=True):
         data = body()
         clients = target_clients(data)
         title, action = reports.build_report(clients, data.get("sections"), data.get("formats"), data.get("options") or {})
+        job = jobs.start(title, "report", clients, action)
+        return jsonify(job.summary()), 202
+
+    @app.get("/api/fichas/config")
+    def fichas_config():
+        return jsonify(excluded_indexes=fichas.excluded_indexes())
+
+    @app.post("/api/fichas")
+    def fichas_create():
+        data = body()
+        clients = target_clients(data)
+        title, action = fichas.build_fichas(clients, data.get("options") or {})
         job = jobs.start(title, "report", clients, action)
         return jsonify(job.summary()), 202
 
